@@ -1,0 +1,5 @@
+{
+  "name": "WP SEO Optimizer AI",
+  "description": "An AI-powered application to analyze, grade, and rewrite SEO meta titles and descriptions for WordPress websites by crawling their sitemaps, aiming to boost organic traffic and rankings.",
+  "requestFramePermissions": []
+}
