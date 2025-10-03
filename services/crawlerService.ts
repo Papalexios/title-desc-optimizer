@@ -2,7 +2,6 @@ import { SeoData } from '../types';
 
 // A single, high-performance, commercial-grade proxy endpoint replaces the old, unreliable system.
 const CORS_PROXY = (url: string) => `https://cors.sh/${encodeURIComponent(url)}`;
-const NON_HTML_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|xml|css|js|ico|json|txt|docx|xls|xlsx|ppt|pptx)(\?.*)?$/i;
 
 /**
  * A robust fetch wrapper that includes a timeout to prevent hanging requests.
@@ -23,9 +22,9 @@ function fetchWithTimeout(resource: RequestInfo, options: RequestInit = {}, time
 /**
  * An intelligent fetch utility that uses the new robust proxy.
  */
-async function fetchWithProxy(url: string): Promise<Response> {
+async function fetchWithProxy(url: string, options: RequestInit = {}): Promise<Response> {
     const proxiedUrl = CORS_PROXY(url);
-    const response = await fetchWithTimeout(proxiedUrl, {}, 15000); // 15s timeout
+    const response = await fetchWithTimeout(proxiedUrl, options, 15000); // 15s timeout
     if (!response.ok) {
         throw new Error(`Request failed with status: ${response.status} ${response.statusText}`);
     }
@@ -166,6 +165,7 @@ async function processUrlsWithConcurrency<T>(
     const worker = async () => {
         while (index < urls.length) {
             const currentIndex = index++;
+            if (currentIndex >= urls.length) return; // Guard against race condition at the end
             const url = urls[currentIndex];
             try {
                 results[currentIndex] = await asyncFn(url);
@@ -182,6 +182,37 @@ async function processUrlsWithConcurrency<T>(
     await Promise.all(workers);
     return results;
 }
+
+/**
+ * Performs a lightweight HEAD request to validate if a URL points to an HTML document.
+ * Optimistically includes URLs if the HEAD request fails, letting the full crawl handle errors.
+ */
+async function validateUrl(url: string): Promise<string | null> {
+    try {
+        const proxiedUrl = CORS_PROXY(url);
+        // Use fetchWithTimeout directly to handle non-ok responses without throwing
+        const response = await fetchWithTimeout(proxiedUrl, { method: 'HEAD' });
+
+        if (response.ok) {
+            const contentType = response.headers.get('Content-Type');
+            if (contentType && contentType.includes('text/html')) {
+                return url; // It's confirmed HTML.
+            }
+            console.log(`Skipping non-HTML URL: ${url} (Content-Type: ${contentType})`);
+            return null; // It's not HTML, so we filter it out.
+        }
+        
+        // If HEAD is not allowed (e.g., 405) or another non-OK status, we can't be sure.
+        // Let's be optimistic and include it. The full GET later will fail if it's not a page.
+        console.warn(`HEAD request for ${url} returned status ${response.status}. Optimistically including for full GET.`);
+        return url;
+    } catch (e) {
+        // Network error, timeout, etc.
+        console.warn(`HEAD request for ${url} failed, optimistically including for full GET. Reason:`, (e as Error).message);
+        return url;
+    }
+}
+
 
 /**
  * The main crawler function, orchestrating the state-of-the-art fetching and parsing logic.
@@ -224,20 +255,35 @@ export const crawlSite = async (
 
     const allUrlsFromSitemaps = (await Promise.all(sitemapProcessingPromises)).flat();
     
-    // Deduplicate and filter URLs
+    // Deduplicate URLs before the expensive validation step
     const uniqueUrls = Array.from(new Set(allUrlsFromSitemaps));
-    const pageUrls = uniqueUrls.filter(u => !NON_HTML_EXTENSIONS.test(u));
 
-    if (pageUrls.length === 0) {
-        throw new Error("Found sitemap(s), but they contained no valid, crawlable HTML page URLs after filtering.");
+    if (uniqueUrls.length === 0) {
+        throw new Error("Sitemap(s) were found, but they appear to be empty or could not be parsed correctly.");
     }
 
-    console.log(`Discovered ${uniqueUrls.length} unique URLs. Analyzing ${pageUrls.length} filtered HTML pages.`);
-    
-    // Dramatically increased concurrency for a massive speed boost.
+    // STAGE 1: Ultra-fast validation of all URLs to find HTML pages
+    console.log(`Discovered ${uniqueUrls.length} unique URLs. Validating content types before full crawl...`);
+    const VALIDATION_CONCURRENCY_LIMIT = 50; // Use higher concurrency for lightweight HEAD requests.
+    onProgress(0, uniqueUrls.length);
+
+    const validationResults = await processUrlsWithConcurrency(
+        uniqueUrls,
+        validateUrl,
+        VALIDATION_CONCURRENCY_LIMIT,
+        (current, total) => onProgress(current, total) // Pass progress through
+    );
+
+    const pageUrls = validationResults.filter((result): result is string => result !== null);
+
+    if (pageUrls.length === 0) {
+        throw new Error("Found sitemap(s), but they contained no valid HTML page URLs after validation. The sitemap might be pointing to non-HTML resources (like images or PDFs), or the server may be blocking automated requests.");
+    }
+
+    // STAGE 2: Full, robust crawl of validated HTML pages
+    console.log(`Validated ${pageUrls.length} crawlable HTML pages. Starting metadata extraction.`);
     const CONCURRENCY_LIMIT = 30;
-    console.log(`Processing ${pageUrls.length} URLs with a concurrency limit of ${CONCURRENCY_LIMIT}.`);
-    onProgress(0, pageUrls.length);
+    onProgress(0, pageUrls.length); // Reset progress for the crawling stage
 
     const crawlFn = (pageUrl: string) =>
         fetchAndParseHtml(pageUrl).then(data => ({ ...data, url: pageUrl }));
@@ -246,7 +292,7 @@ export const crawlSite = async (
     const validResults = results.filter((result): result is SeoData => result !== null);
 
     if (validResults.length === 0) {
-        throw new Error("Crawled all URLs from the sitemap but could not retrieve SEO data from any of them. The site may be blocking the crawler, or have other accessibility issues.");
+        throw new Error("Crawled all validated URLs from the sitemap but could not retrieve SEO data from any of them. The site may be blocking the crawler, or have other accessibility issues.");
     }
 
     console.log(`Successfully crawled and processed ${validResults.length} pages.`);
