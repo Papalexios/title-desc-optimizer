@@ -1,26 +1,5 @@
 import { WordPressCreds } from '../types';
-
-// Use a robust, commercial-grade CORS proxy for maximum reliability.
-const CORS_PROXY = (url: string) => `https://cors.sh/${encodeURIComponent(url)}`;
-const FETCH_TIMEOUT = 30000; // Increased to 30 seconds for slower WP sites
-
-/**
- * A robust fetch wrapper that includes a timeout to prevent hanging requests.
- * @param resource The URL to fetch.
- * @param options Standard fetch options.
- * @returns A promise that resolves to the fetch response.
- */
-function fetchWithTimeout(resource: RequestInfo, options: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-    const response = fetch(resource, {
-        ...options,
-        signal: controller.signal
-    });
-    response.finally(() => clearTimeout(id));
-    return response;
-}
-
+import { robustFetch } from './fetchService';
 
 /**
  * Finds the WordPress Post ID and Post Type for a given public URL.
@@ -40,11 +19,10 @@ async function getPostIdAndType(creds: WordPressCreds, pageUrl: string): Promise
 
     for (const type of postTypes) {
         const apiUrl = `${creds.siteUrl}/wp-json/wp/v2/${type}?slug=${slug}`;
-        const proxiedUrl = CORS_PROXY(apiUrl);
 
         try {
             console.log(`Searching for slug "${slug}" in post type "${type}"...`);
-            const response = await fetchWithTimeout(proxiedUrl, { headers });
+            const response = await robustFetch(apiUrl, { headers }, { throwOnHttpError: false });
             
             if (!response.ok) {
                  if(response.status === 404) continue; // Try the next post type
@@ -82,7 +60,6 @@ export async function updateSeoOnWordPress(creds: WordPressCreds, pageUrl: strin
 
     const { id, type } = postInfo;
     const apiUrl = `${creds.siteUrl}/wp-json/wp/v2/${type}/${id}`;
-    const proxiedUrl = CORS_PROXY(apiUrl);
     
     const encodedCreds = btoa(`${creds.username}:${creds.appPassword}`);
     const headers = {
@@ -110,11 +87,11 @@ export async function updateSeoOnWordPress(creds: WordPressCreds, pageUrl: strin
     console.log(`Attempting to update Post ID ${id} at ${apiUrl} with payload:`, bodyPayload);
 
     try {
-        const response = await fetchWithTimeout(proxiedUrl, {
+        const response = await robustFetch(apiUrl, {
             method: 'POST',
             headers,
             body
-        });
+        }, { throwOnHttpError: false, timeout: 30000 });
 
         if (!response.ok) {
              if (response.status === 401 || response.status === 403) {
@@ -130,9 +107,6 @@ export async function updateSeoOnWordPress(creds: WordPressCreds, pageUrl: strin
 
     } catch (error) {
         console.error("Error in updateSeoOnWordPress:", error);
-         if (error instanceof Error && error.name === 'AbortError') {
-            throw new Error('The request to your WordPress site timed out.');
-        }
         // Re-throw the original or a new error to be caught by the UI
         throw error;
     }

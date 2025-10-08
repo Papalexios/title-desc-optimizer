@@ -34,9 +34,11 @@ export enum AppState {
 export type AiProvider = 'gemini' | 'openai' | 'openrouter' | 'groq';
 
 export interface AiConfig {
+    id: string; // Unique ID for list management
     provider: AiProvider;
     apiKey: string;
     model?: string; // Optional, for OpenRouter/Groq
+    isValid: boolean | null; // null = untested, true = valid, false = invalid
 }
 
 export interface WordPressCreds {

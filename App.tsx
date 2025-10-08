@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Header } from './components/Header';
 import { UrlInput } from './components/UrlInput';
@@ -6,6 +7,8 @@ import { RewriteModal } from './components/RewriteModal';
 import { SeoAnalysis, AppState, RewriteSuggestion, AiConfig, WordPressCreds, GradeFilter } from './types';
 import { crawlSite } from './services/crawlerService';
 import { analyzeSeo, generateSeoSuggestions, validateApiKey } from './services/aiService';
+// FIX: Removed `AnalysisResult` from this import as it's not exported from `aiLoadBalancer` and is not explicitly used in this file.
+import { AILoadBalancer } from './services/aiLoadBalancer';
 import { updateSeoOnWordPress } from './services/wordpressService';
 import { ApiConfig } from './components/ApiConfig';
 import { WordPressCredsModal } from './components/WordPressCredsModal';
@@ -21,10 +24,10 @@ const App: React.FC = () => {
     const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
     const [modalData, setModalData] = useState<{ url: string, suggestions: RewriteSuggestion[], generationError?: string } | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
-    const [isApiConfigValid, setIsApiConfigValid] = useState<boolean>(false);
+    const [aiConfigs, setAiConfigs] = useState<AiConfig[]>([]);
     const [crawlProgress, setCrawlProgress] = useState<{ crawled: number, total: number } | null>(null);
-    const [analysisProgress, setAnalysisProgress] = useState<{ analyzed: number, total: number } | null>(null);
+    const [crawlStatus, setCrawlStatus] = useState<string | null>(null);
+    const [analysisProgress, setAnalysisProgress] = useState<{ analyzed: number, total: number, message: string } | null>(null);
     const [targetLocation, setTargetLocation] = useState<string | undefined>(undefined);
     const [wpCreds, setWpCreds] = useState<WordPressCreds | null>(null);
     const [wpUpdateError, setWpUpdateError] = useState<string | null>(null);
@@ -32,25 +35,28 @@ const App: React.FC = () => {
     const [rewriteQueueTotal, setRewriteQueueTotal] = useState(0);
     const [syncedUrls, setSyncedUrls] = useState<Set<string>>(new Set());
     const [analyzedUrls, setAnalyzedUrls] = useState<Set<string>>(new Set());
+    const [nextConfigIndex, setNextConfigIndex] = useState(0);
 
     const [filterGrade, setFilterGrade] = useState<GradeFilter>('all');
     const [searchTerm, setSearchTerm] = useState('');
+    
+    const hasValidApiConfig = useMemo(() => aiConfigs.some(c => c.isValid), [aiConfigs]);
 
-    const handleConfigSave = useCallback(async (config: AiConfig): Promise<boolean> => {
-        const isValid = await validateApiKey(config);
-        if (isValid) {
-            setAiConfig(config);
-            setIsApiConfigValid(true);
-        } else {
-            setAiConfig(null);
-            setIsApiConfigValid(false);
-        }
-        return isValid;
-    }, []);
+    const handleAddConfig = (newConfig: AiConfig) => {
+        setAiConfigs(prev => [...prev, newConfig]);
+    };
+
+    const handleRemoveConfig = (id: string) => {
+        setAiConfigs(prev => prev.filter(c => c.id !== id));
+    };
+
+    const handleUpdateConfigValidation = (id: string, isValid: boolean) => {
+        setAiConfigs(prev => prev.map(c => c.id === id ? { ...c, isValid } : c));
+    };
 
     const handleCrawl = useCallback(async (url: string, sitemapUrl?: string, location?: string) => {
-        if (!isApiConfigValid || !aiConfig) {
-            setError("Please configure and validate your AI provider API key first.");
+        if (!hasValidApiConfig) {
+            setError("Please add and validate at least one AI provider API key first.");
             return;
         }
         setAppState(AppState.Crawling);
@@ -62,15 +68,18 @@ const App: React.FC = () => {
         setFilterGrade('all');
         setSearchTerm('');
         setCrawlProgress(null);
+        setCrawlStatus(null);
         setAnalysisProgress(null);
         setTargetLocation(location);
         
         try {
             const onCrawlProgress = (crawled: number, total: number) => setCrawlProgress({ crawled, total });
-            const pages = await crawlSite(url, sitemapUrl, onCrawlProgress);
+            const onStatusUpdate = (message: string) => setCrawlStatus(message);
+            const pages = await crawlSite(url, sitemapUrl, onCrawlProgress, onStatusUpdate);
             
             setSeoData(pages);
             setCrawlProgress(null);
+            setCrawlStatus(null);
             setAppState(AppState.Crawled);
 
         } catch (e) {
@@ -78,51 +87,54 @@ const App: React.FC = () => {
             setError(`Failed to crawl the website. ${(e as Error).message}`);
             setAppState(AppState.Error);
         }
-    }, [aiConfig, isApiConfigValid]);
+    }, [hasValidApiConfig]);
 
     const handleAnalyzeSelected = useCallback(async () => {
-        if (!aiConfig) return;
+        const validConfigs = aiConfigs.filter(c => c.isValid);
+        if (validConfigs.length === 0) return;
+        
         const urlsToAnalyze = Array.from(selectedUrls).filter(url => !analyzedUrls.has(url));
         if (urlsToAnalyze.length === 0) return;
-
+    
         setAppState(AppState.Analyzing);
         const totalToAnalyze = urlsToAnalyze.length;
-        setAnalysisProgress({ analyzed: 0, total: totalToAnalyze });
+        setAnalysisProgress({ analyzed: 0, total: totalToAnalyze, message: "Initializing AI workers..." });
 
-        // Quadrupled concurrency for a massive speed boost in AI analysis.
-        const AI_CONCURRENCY_LIMIT = 20;
+        const dataToAnalyze = urlsToAnalyze.map(url => seoData.find(d => d.url === url)!).filter(Boolean);
+        
+        const balancer = new AILoadBalancer(validConfigs);
 
-        for (let i = 0; i < urlsToAnalyze.length; i += AI_CONCURRENCY_LIMIT) {
-            const chunkUrls = urlsToAnalyze.slice(i, i + AI_CONCURRENCY_LIMIT);
-            const chunkData = chunkUrls.map(url => seoData.find(d => d.url === url)!).filter(Boolean);
-
-            const analysisPromises = chunkData.map(page =>
-                analyzeSeo(page.title, page.description, aiConfig).then(analysis => ({
-                    url: page.url,
-                    ...analysis,
-                    grade: Math.round((analysis.titleGrade + analysis.descriptionGrade) / 2),
-                }))
-            );
-            const chunkResults = await Promise.all(analysisPromises);
-
-            setSeoData(prevData => {
+        balancer.onProgress((progress) => {
+             setAnalysisProgress({ 
+                analyzed: progress.completed, 
+                total: progress.total, 
+                message: `Analyzing... ${progress.completed}/${progress.total}. ${progress.activeWorkers} AI workers active.`
+            });
+        });
+        
+        balancer.onResult((result) => {
+             setSeoData(prevData => {
                 const newData = [...prevData];
-                chunkResults.forEach(result => {
-                    const index = newData.findIndex(d => d.url === result.url);
-                    if (index !== -1) {
-                        newData[index] = { ...newData[index], ...result };
-                    }
-                });
+                const index = newData.findIndex(d => d.url === result.url);
+                if (index !== -1) {
+                    newData[index] = { ...newData[index], ...result.analysis };
+                }
                 return newData;
             });
-            
-            setAnalyzedUrls(prev => new Set([...prev, ...chunkUrls]));
-            setAnalysisProgress({ analyzed: Math.min(i + AI_CONCURRENCY_LIMIT, totalToAnalyze), total: totalToAnalyze });
-        }
+            setAnalyzedUrls(prev => new Set([...prev, result.url]));
+        });
         
+        balancer.onError((url, error) => {
+            console.error(`Failed to analyze ${url}:`, error);
+            // Optionally update the UI to show an error for this specific row
+        });
+
+        await balancer.processQueue(dataToAnalyze);
+
         setAppState(AppState.Crawled); // Return to the main data view
         setAnalysisProgress(null);
-    }, [aiConfig, selectedUrls, analyzedUrls, seoData]);
+    }, [aiConfigs, selectedUrls, analyzedUrls, seoData]);
+
 
     const handleSelectionChange = useCallback((url: string, isSelected: boolean) => {
         setSelectedUrls(prev => {
@@ -132,14 +144,30 @@ const App: React.FC = () => {
             return newSelection;
         });
     }, []);
+    
+    const getNextValidConfig = useCallback(() => {
+        const validConfigs = aiConfigs.filter(c => c.isValid);
+        if (validConfigs.length === 0) return null;
+
+        const config = validConfigs[nextConfigIndex % validConfigs.length];
+        setNextConfigIndex(prev => prev + 1);
+        return config;
+    }, [aiConfigs, nextConfigIndex]);
 
     const processNextInQueue = useCallback(async () => {
-        if (rewriteQueue.length === 0 || !aiConfig) {
+        if (rewriteQueue.length === 0) {
             if (rewriteQueue.length === 0) {
                 setAppState(AppState.Crawled);
                 setRewriteQueueTotal(0);
             }
             return;
+        }
+
+        const config = getNextValidConfig();
+        if (!config) {
+             setError("No valid AI configuration available for rewriting.");
+             setRewriteQueue([]);
+             return;
         }
 
         const nextUrl = rewriteQueue[0];
@@ -157,7 +185,7 @@ const App: React.FC = () => {
         try {
             const suggestions = await generateSeoSuggestions(
                 dataToRewrite.title, dataToRewrite.description, dataToRewrite.url,
-                dataToRewrite.topic, aiConfig, targetLocation
+                dataToRewrite.topic, config, targetLocation
             );
             setModalData({ url: nextUrl, suggestions });
         } catch (e) {
@@ -168,7 +196,7 @@ const App: React.FC = () => {
                 generationError: `AI Error: ${(e as Error).message}. You can skip to the next item in the queue.`
             });
         }
-    }, [rewriteQueue, aiConfig, seoData, targetLocation]);
+    }, [rewriteQueue, seoData, targetLocation, getNextValidConfig]);
 
     useEffect(() => {
         if (rewriteQueue.length > 0 && !modalData) {
@@ -177,13 +205,13 @@ const App: React.FC = () => {
     }, [rewriteQueue, modalData, processNextInQueue]);
     
     const handleRewriteSingle = (url: string) => {
-        if (!aiConfig || syncedUrls.has(url) || !analyzedUrls.has(url)) return;
+        if (!hasValidApiConfig || syncedUrls.has(url) || !analyzedUrls.has(url)) return;
         setRewriteQueue([url]);
         setRewriteQueueTotal(1);
     };
 
     const handleRewriteSelected = async () => {
-        if (!aiConfig || selectedUrls.size === 0) return;
+        if (!hasValidApiConfig || selectedUrls.size === 0) return;
         const urlsToRewrite = Array.from(selectedUrls).filter(url => !syncedUrls.has(url) && analyzedUrls.has(url));
         if (urlsToRewrite.length === 0) return;
         setRewriteQueue(urlsToRewrite);
@@ -261,11 +289,17 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-slate-900 text-slate-200 font-sans flex flex-col">
-            <Header isValidApi={isApiConfigValid} />
+            <Header isValidApi={hasValidApiConfig} />
             <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow">
                 <div className="max-w-7xl mx-auto">
-                    <ApiConfig onConfigSave={handleConfigSave} isDisabled={isProcessing} />
-                    <UrlInput onAnalyze={handleCrawl} isLoading={appState === AppState.Crawling} isApiConfigured={isApiConfigValid} />
+                    <ApiConfig 
+                        configs={aiConfigs}
+                        onAddConfig={handleAddConfig}
+                        onRemoveConfig={handleRemoveConfig}
+                        onUpdateValidation={handleUpdateConfigValidation}
+                        isDisabled={isProcessing} 
+                    />
+                    <UrlInput onAnalyze={handleCrawl} isLoading={appState === AppState.Crawling} isApiConfigured={hasValidApiConfig} />
 
                     {error && <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg text-red-300">{error}</div>}
 
@@ -274,6 +308,7 @@ const App: React.FC = () => {
                             <p className="text-xl text-indigo-300 animate-pulse">
                                 {appState === AppState.Crawling ? 'Crawling sitemap and fetching page data...' : 'AI is performing deep SEO analysis...'}
                             </p>
+                            {crawlStatus && <p className="text-md text-slate-400 mt-2">{crawlStatus}</p>}
                            {appState === AppState.Crawling && crawlProgress && (
                                <ProgressBar 
                                    progress={(crawlProgress.crawled / crawlProgress.total) * 100}
@@ -283,7 +318,7 @@ const App: React.FC = () => {
                            {appState === AppState.Analyzing && analysisProgress && (
                                 <ProgressBar 
                                    progress={(analysisProgress.analyzed / analysisProgress.total) * 100}
-                                   label={`AI analyzing page ${analysisProgress.analyzed} of ${analysisProgress.total}...`}
+                                   label={analysisProgress.message}
                                />
                             )}
                         </div>

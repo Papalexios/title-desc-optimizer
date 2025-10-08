@@ -1,6 +1,18 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { RewriteSuggestion, AiConfig, AiProvider } from '../types';
 
+/**
+ * Custom error class to specifically identify rate-limiting issues.
+ * This allows the AILoadBalancer to catch this specific error and
+ * implement cool-down logic for the affected API key.
+ */
+export class RateLimitError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'RateLimitError';
+    }
+}
+
 // Schemas for Gemini's structured JSON output
 const analysisSchema = {
     type: Type.OBJECT,
@@ -73,58 +85,41 @@ async function executeOpenAiCompatibleChat<T>(
             { role: "user", content: prompt }
         ]
     };
-    
-    let lastError: Error | null = null;
-    const MAX_RETRIES = 4;
-    let delay = 1000;
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${config.apiKey}`,
-                    'HTTP-Referer': 'https://seo-analyzer.dev', // Required by OpenRouter
-                    'X-Title': 'WP SEO Optimizer AI',
-                },
-                body: JSON.stringify(body)
-            });
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.apiKey}`,
+            'HTTP-Referer': 'https://seo-analyzer.dev', // Required by OpenRouter
+            'X-Title': 'WP SEO Optimizer AI',
+        },
+        body: JSON.stringify(body)
+    });
 
-            if (response.status === 429) {
-                 const retryAfter = response.headers.get('Retry-After');
-                 const wait = retryAfter ? parseInt(retryAfter, 10) * 1000 : delay;
-                 console.warn(`Rate limit hit (attempt ${attempt}). Retrying after ${wait}ms...`);
-                 await new Promise(res => setTimeout(res, wait + Math.random() * 500)); // Jitter
-                 delay *= 2; // Exponential backoff
-                 continue;
-            }
-
-            if (!response.ok) {
-                const errorBody = await response.text();
-                console.error("API Error Response:", errorBody);
-                throw new Error(`API request failed for model ${config.model} with status ${response.status}: ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            const content = data.choices[0]?.message?.content;
-            if (!content) throw new Error("Received an empty content response from the AI.");
-
-            try {
-                return JSON.parse(content); // Success!
-            } catch (e) {
-                console.error("Failed to parse JSON response from AI:", content);
-                throw new Error("The AI returned invalid JSON.");
-            }
-        } catch (error) {
-            lastError = error as Error;
-            if (attempt === MAX_RETRIES) break; // Don't wait after the last attempt
-            console.warn(`Request failed (attempt ${attempt}): ${lastError.message}. Retrying in ${delay}ms...`);
-            await new Promise(res => setTimeout(res, delay));
-            delay *= 2;
-        }
+    if (response.status === 429) {
+        const errorBody = await response.json();
+        const errorMessage = errorBody?.error?.message || 'Rate limit exceeded.';
+        console.warn(`Rate limit hit for ${config.provider} (${config.model}): ${errorMessage}`);
+        throw new RateLimitError(`Rate limit hit for ${config.provider}: ${errorMessage}`);
     }
-    throw lastError ?? new Error(`API request failed for ${config.model} after ${MAX_RETRIES} attempts.`);
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error("API Error Response:", errorBody);
+        throw new Error(`API request failed for model ${config.model} with status ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content;
+    if (!content) throw new Error("Received an empty content response from the AI.");
+
+    try {
+        return JSON.parse(content); // Success!
+    } catch (e) {
+        console.error("Failed to parse JSON response from AI:", content);
+        throw new Error("The AI returned invalid JSON.");
+    }
 }
 
 /**
@@ -162,10 +157,18 @@ export const validateApiKey = async (config: AiConfig): Promise<boolean> => {
     }
 };
 
+export type AnalysisResult = { 
+    topic: string, 
+    titleGrade: number, 
+    titleFeedback: string, 
+    descriptionGrade: number, 
+    descriptionFeedback: string 
+};
+
 /**
  * Analyzes SEO data using a live call to the configured AI provider.
  */
-export const analyzeSeo = async (title: string, description: string, config: AiConfig): Promise<{ topic: string, titleGrade: number, titleFeedback: string, descriptionGrade: number, descriptionFeedback: string }> => {
+export const analyzeSeo = async (title: string, description: string, config: AiConfig): Promise<AnalysisResult> => {
     const prompt = `
         As an elite SEO analyst, perform a critical review of the following meta elements.
         - Title: "${title}"
@@ -178,12 +181,7 @@ export const analyzeSeo = async (title: string, description: string, config: AiC
         4.  **Feedback:** Provide concise, expert-level feedback for both elements.
         Return your complete analysis in the required JSON format.
     `;
-    const errorResult = {
-        topic: 'Analysis failed',
-        titleGrade: 0, titleFeedback: 'Could not analyze title due to an API error.',
-        descriptionGrade: 0, descriptionFeedback: 'Could not analyze description due to an API error.'
-    };
-
+    
     try {
         if (config.provider === 'gemini') {
             const ai = new GoogleGenAI({ apiKey: config.apiKey });
@@ -211,8 +209,9 @@ export const analyzeSeo = async (title: string, description: string, config: AiC
             };
         }
     } catch (error) {
-        console.error(`Error analyzing SEO with ${config.provider}:`, error);
-        return errorResult;
+        console.error(`Error analyzing SEO with ${config.provider} (${config.id}):`, error);
+        // Re-throw the error so the load balancer can handle it
+        throw error;
     }
 };
 

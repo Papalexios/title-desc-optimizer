@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { RewriteSuggestion, SeoAnalysis } from '../types';
 import { GradeBadge } from './common/GradeBadge';
@@ -211,16 +210,23 @@ export const RewriteModal: React.FC<RewriteModalProps> = ({
                                     <strong>Error:</strong> {updateError}
                                 </div>
                             )}
-                            <div className="flex justify-end gap-4">
-                                <button onClick={onClose} className="px-4 py-2 bg-slate-600 text-white font-semibold rounded-lg hover:bg-slate-500 transition-colors disabled:opacity-50" disabled={isUpdating}>Cancel</button>
-                                <button
-                                    id="rewrite-button"
-                                    onClick={handleUpdateClick}
-                                    disabled={!selectedSuggestion || updateStatus !== 'idle'}
-                                    className={`flex items-center justify-center gap-2 px-6 py-2 text-white font-semibold rounded-lg transition-colors ${getButtonClass()}`}
-                                >
-                                    {getButtonContent()}
-                                </button>
+                            <div className="flex justify-between items-center w-full">
+                                <div>
+                                    {queueTotal && queueTotal > 1 && (
+                                         <button onClick={onStopBatch} className="px-4 py-2 bg-red-800 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors">Stop Batch</button>
+                                    )}
+                                </div>
+                                <div className="flex justify-end gap-4">
+                                    <button onClick={onClose} className="px-4 py-2 bg-slate-600 text-white font-semibold rounded-lg hover:bg-slate-500 transition-colors disabled:opacity-50" disabled={isUpdating}>Cancel</button>
+                                    <button
+                                        id="rewrite-button"
+                                        onClick={handleUpdateClick}
+                                        disabled={!selectedSuggestion || updateStatus !== 'idle'}
+                                        className={`flex items-center justify-center gap-2 px-6 py-2 text-white font-semibold rounded-lg transition-colors ${getButtonClass()}`}
+                                    >
+                                        {getButtonContent()}
+                                    </button>
+                                </div>
                             </div>
                         </>
                     )}
