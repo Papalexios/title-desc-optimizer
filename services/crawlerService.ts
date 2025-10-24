@@ -1,10 +1,63 @@
-import { SeoData } from '../types';
+import { SeoData, SeoAnalysis, QuickScanResult } from '../types';
 import { robustFetch } from './fetchService';
 
 /**
- * Fetches and parses HTML with automatic retries and a robust fetching layer.
+ * NEW: Performs a fast, programmatic (non-AI) audit of all crawled pages.
+ * This function identifies common, objective SEO issues without making any API calls.
  */
-async function fetchAndParseHtml(url: string, retries = 3, delay = 1000): Promise<{ title: string; description: string }> {
+function performQuickScan(pages: SeoData[]): SeoAnalysis[] {
+    const titleMap = new Map<string, string[]>();
+    const descriptionMap = new Map<string, string[]>();
+
+    // First pass: group pages by title and description to find duplicates
+    pages.forEach(page => {
+        if (page.title) {
+            if (!titleMap.has(page.title)) titleMap.set(page.title, []);
+            titleMap.get(page.title)!.push(page.url);
+        }
+        if (page.description) {
+            if (!descriptionMap.has(page.description)) descriptionMap.set(page.description, []);
+            descriptionMap.get(page.description)!.push(page.url);
+        }
+    });
+
+    return pages.map(page => {
+        const issues: string[] = [];
+        const quickScanResult: QuickScanResult = {
+            isTitleMissing: !page.title,
+            isTitleTooLong: page.title.length > 60,
+            isTitleTooShort: page.title.length > 0 && page.title.length < 30,
+            isDescriptionMissing: !page.description,
+            isDescriptionTooLong: page.description.length > 160,
+            isDescriptionTooShort: page.description.length > 0 && page.description.length < 70,
+            isTitleDuplicate: !!(page.title && titleMap.get(page.title)!.length > 1),
+            isDescriptionDuplicate: !!(page.description && descriptionMap.get(page.description)!.length > 1),
+        };
+
+        if (quickScanResult.isTitleMissing) issues.push('Missing Title');
+        if (quickScanResult.isTitleTooLong) issues.push('Title Too Long');
+        if (quickScanResult.isTitleTooShort) issues.push('Title Too Short');
+        if (quickScanResult.isTitleDuplicate) issues.push('Duplicate Title');
+        if (quickScanResult.isDescriptionMissing) issues.push('Missing Description');
+        if (quickScanResult.isDescriptionTooLong) issues.push('Description Too Long');
+        if (quickScanResult.isDescriptionTooShort) issues.push('Description Too Short');
+        if (quickScanResult.isDescriptionDuplicate) issues.push('Duplicate Description');
+
+        return {
+            ...page,
+            status: 'scanned',
+            issues,
+            quickScan: quickScanResult,
+        };
+    });
+}
+
+
+/**
+ * Fetches and parses HTML with automatic retries and a robust fetching layer.
+ * Now extracts the main page content for deep AI analysis.
+ */
+async function fetchAndParseHtml(url: string, retries = 3, delay = 1000): Promise<{ title: string; description: string; content: string }> {
     for (let attempt = 1; attempt <= retries + 1; attempt++) {
         try {
             const response = await robustFetch(url);
@@ -16,8 +69,21 @@ async function fetchAndParseHtml(url: string, retries = 3, delay = 1000): Promis
             const doc = parser.parseFromString(html, 'text/html');
             const title = doc.querySelector('title')?.textContent || '';
             const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+            
+            const mainContentElement = doc.querySelector('main, article, [role="main"], .main-content, #main, #content');
+            let contentText = '';
+            if (mainContentElement) {
+                const contentClone = mainContentElement.cloneNode(true) as HTMLElement;
+                contentClone.querySelectorAll('script, style, nav, header, footer, aside, .sidebar, form, button, input').forEach(el => el.remove());
+                contentText = contentClone.innerText.replace(/\s\s+/g, ' ').trim();
+            } else {
+                const bodyClone = doc.body.cloneNode(true) as HTMLElement;
+                bodyClone.querySelectorAll('script, style, nav, header, footer, aside, .sidebar, form, button, input').forEach(el => el.remove());
+                contentText = bodyClone.innerText.replace(/\s\s+/g, ' ').trim();
+            }
 
-            return { title, description }; // Success!
+            return { title, description, content: contentText.substring(0, 25000) };
+
         } catch (error) {
             const err = error as Error;
             let reason = err.message;
@@ -42,7 +108,6 @@ async function findSitemaps(siteUrl: string): Promise<string[]> {
     const sitemaps = new Set<string>();
     const robotsUrl = new URL('/robots.txt', siteUrl).href;
 
-    // 1. Try robots.txt (the professional way)
     try {
         console.log(`Checking for sitemaps in ${robotsUrl}`);
         const response = await robustFetch(robotsUrl);
@@ -55,7 +120,6 @@ async function findSitemaps(siteUrl: string): Promise<string[]> {
         console.warn(`Could not fetch or parse robots.txt: ${(e as Error).message}`);
     }
 
-    // 2. NEW SOTA Method: Fetch homepage and look for <link rel="sitemap">
     try {
         console.log(`Checking for sitemap <link> on homepage: ${siteUrl}`);
         const response = await robustFetch(siteUrl, { headers: { 'Accept': 'text/html' }});
@@ -65,7 +129,6 @@ async function findSitemaps(siteUrl: string): Promise<string[]> {
         doc.querySelectorAll('link[rel="sitemap"]').forEach(link => {
             const href = link.getAttribute('href');
             if (href) {
-                // Resolve relative URLs against the base site URL
                 sitemaps.add(new URL(href, siteUrl).href);
             }
         });
@@ -78,14 +141,12 @@ async function findSitemaps(siteUrl: string): Promise<string[]> {
         return Array.from(sitemaps);
     }
     
-    // 3. If nothing found, try common paths
     console.log("No sitemaps found yet, checking common paths...");
     const commonPaths = ['/sitemap.xml', '/sitemap_index.xml', '/post-sitemap.xml', '/page-sitemap.xml'];
     const pathChecks = commonPaths.map(async path => {
         const potentialSitemapUrl = new URL(path, siteUrl).href;
         try {
             const response = await robustFetch(potentialSitemapUrl, {}, { throwOnHttpError: false });
-            // Check headers for XML content type to ensure it's likely a sitemap
             if (response.ok && (response.headers.get('content-type')?.includes('xml') || response.headers.get('content-type')?.includes('text/xml'))) {
                  console.log(`Found sitemap at common path: ${potentialSitemapUrl}`);
                  return potentialSitemapUrl;
@@ -100,34 +161,28 @@ async function findSitemaps(siteUrl: string): Promise<string[]> {
 
 /**
  * An "ultra-smart", enterprise-grade sitemap parser.
- * This function is engineered for maximum compatibility, correctly handling nested sitemap indexes,
- * XML namespaces, and other common inconsistencies that break simpler parsers.
  */
 async function parseSitemap(sitemapXml: string, sitemapUrl: string): Promise<string[]> {
     const parser = new DOMParser();
     const sitemapDoc = parser.parseFromString(sitemapXml, "application/xml");
 
-    // Immediately fail with a clear, actionable error if the XML is malformed.
     if (sitemapDoc.querySelector("parsererror")) {
         const errorText = sitemapDoc.querySelector("parsererror div")?.textContent || "Unknown XML parsing error.";
         throw new Error(`The XML from sitemap '${sitemapUrl}' is malformed and could not be parsed. Error: ${errorText}`);
     }
 
-    // Use a highly robust regex to extract all <loc> URLs. This method is immune to XML namespace issues.
     const locRegex = /<loc>(.*?)<\/loc>/g;
     const allUrls = Array.from(sitemapXml.matchAll(locRegex), m => {
-        // A clever trick to decode any XML entities (like &amp;) into valid URL characters.
         const tempDiv = document.createElement("div");
         tempDiv.innerHTML = m[1];
         return tempDiv.textContent || tempDiv.innerText || "";
-    }).filter(Boolean); // Filter out any empty results
+    }).filter(Boolean);
 
     if (allUrls.length === 0) {
         console.warn(`No <loc> tags could be found in sitemap: ${sitemapUrl}`);
         return [];
     }
     
-    // Reliably detect if this is a sitemap index by inspecting the root element name.
     const isSitemapIndex = sitemapDoc.documentElement.localName === 'sitemapindex';
 
     if (isSitemapIndex) {
@@ -136,17 +191,15 @@ async function parseSitemap(sitemapXml: string, sitemapUrl: string): Promise<str
             try {
                 const response = await robustFetch(nestedSitemapUrl);
                 const nestedSitemapXml = await response.text();
-                return parseSitemap(nestedSitemapXml, nestedSitemapUrl); // Recursive call
+                return parseSitemap(nestedSitemapXml, nestedSitemapUrl);
             } catch (e) {
                 console.warn(`Failed to process nested sitemap ${nestedSitemapUrl}:`, (e as Error).message);
                 return [];
             }
         });
-        // Flatten the array of arrays into a single list of all URLs.
         return (await Promise.all(nestedUrlPromises)).flat();
     }
     
-    // If it's not a sitemap index, we have our final list of page URLs.
     return allUrls;
 }
 
@@ -166,7 +219,7 @@ async function processUrlsWithConcurrency<T>(
     const worker = async () => {
         while (index < urls.length) {
             const currentIndex = index++;
-            if (currentIndex >= urls.length) return; // Guard against race condition at the end
+            if (currentIndex >= urls.length) return;
             const url = urls[currentIndex];
             try {
                 results[currentIndex] = await asyncFn(url);
@@ -186,7 +239,6 @@ async function processUrlsWithConcurrency<T>(
 
 /**
  * Performs a lightweight HEAD request to validate if a URL points to an HTML document.
- * Optimistically includes URLs if the HEAD request fails, letting the full crawl handle errors.
  */
 async function validateUrl(url: string): Promise<string | null> {
     try {
@@ -195,25 +247,22 @@ async function validateUrl(url: string): Promise<string | null> {
         if (response.ok) {
             const contentType = response.headers.get('Content-Type');
             if (contentType && contentType.includes('text/html')) {
-                return url; // It's confirmed HTML.
+                return url;
             }
             console.log(`Skipping non-HTML URL: ${url} (Content-Type: ${contentType})`);
-            return null; // It's not HTML, so we filter it out.
+            return null;
         }
         
-        // If HEAD is not allowed (e.g., 405) or another non-OK status, we can't be sure.
-        // Let's be optimistic and include it. The full GET later will fail if it's not a page.
         console.warn(`HEAD request for ${url} returned status ${response.status}. Optimistically including for full GET.`);
         return url;
     } catch (e) {
-        // Network error, timeout, etc.
         console.warn(`HEAD request for ${url} failed, optimistically including for full GET. Reason:`, (e as Error).message);
         return url;
     }
 }
 
 /**
- * A helper function to fetch and parse a single sitemap URL, providing a clear, contextualized error on failure.
+ * A helper function to fetch and parse a single sitemap URL.
  */
 async function fetchAndParseSitemapLocation(loc: string): Promise<string[]> {
     try {
@@ -225,14 +274,12 @@ async function fetchAndParseSitemapLocation(loc: string): Promise<string[]> {
         return await parseSitemap(sitemapXml, loc);
     } catch(e) {
         const originalError = e as Error;
-        // Create a new, more specific error to throw, which will be shown in the UI.
         throw new Error(`Failed to parse ${loc}: ${originalError.message}`);
     }
 }
 
 /**
  * Tier 3 Failsafe: Fetches the homepage and extracts all internal links.
- * Includes a Google Cache fallback if the direct fetch fails.
  */
 async function extractInternalLinksFromUrl(pageUrl: string, onStatusUpdate: (message: string) => void): Promise<string[]> {
     let html = '';
@@ -250,7 +297,7 @@ async function extractInternalLinksFromUrl(pageUrl: string, onStatusUpdate: (mes
             html = await cacheResponse.text();
         } catch (cacheError) {
             console.error(`Google Cache fallback also failed.`, cacheError);
-            throw e; // Re-throw the original error, as the fallback didn't work.
+            throw e;
         }
     }
     
@@ -270,9 +317,7 @@ async function extractInternalLinksFromUrl(pageUrl: string, onStatusUpdate: (mes
 
         try {
             const absoluteUrl = new URL(href, base.href);
-            // Check if it's an internal link (same origin) and not an anchor/non-http link
             if (absoluteUrl.origin === base.origin && absoluteUrl.protocol.startsWith('http')) {
-                // Clean URL by removing hash and trailing slash for uniqueness
                 absoluteUrl.hash = '';
                 let cleanUrl = absoluteUrl.href;
                 if (cleanUrl.endsWith('/')) {
@@ -280,12 +325,9 @@ async function extractInternalLinksFromUrl(pageUrl: string, onStatusUpdate: (mes
                 }
                 links.add(cleanUrl);
             }
-        } catch (e) {
-            // Ignore invalid URLs (e.g., 'mailto:', 'tel:')
-        }
+        } catch (e) { /* Ignore invalid URLs */ }
     });
 
-    // Also include the pageUrl itself, cleaned
     base.hash = '';
     let cleanBaseUrl = base.href;
     if (cleanBaseUrl.endsWith('/')) {
@@ -303,28 +345,19 @@ async function fetchUrlsFromWaybackMachine(siteUrl: string, onStatusUpdate: (mes
     try {
         const domain = new URL(siteUrl).hostname.replace(/^www\./, '');
         onStatusUpdate(`Querying the Internet Archive for historical URLs for ${domain}...`);
-
-        // This API call is specifically crafted for SOTA performance:
-        // - url=${domain}/* : Get all pages under the domain.
-        // - output=json : Easy to parse.
-        // - fl=original : We only want the original URL field.
-        // - collapse=urlkey : Get only the last unique version of each URL, preventing duplicates.
-        // - filter=mimetype:text/html : Server-side filter for HTML pages, vastly reducing response size.
-        // - filter=statuscode:200 : Only get pages that were successfully archived.
+        
         const waybackApiUrl = `https://web.archive.org/cdx/search/cdx?url=${domain}/*&output=json&fl=original&collapse=urlkey&filter=mimetype:text/html&filter=statuscode:200`;
 
-        const response = await robustFetch(waybackApiUrl, {}, {timeout: 20000}); // Longer timeout for archive
+        const response = await robustFetch(waybackApiUrl, {}, {timeout: 20000});
         const data = await response.json();
 
-        if (!Array.isArray(data) || data.length <= 1) { // data[0] is the header
+        if (!Array.isArray(data) || data.length <= 1) {
             console.warn(`Wayback Machine returned no data for ${domain}`);
             return [];
         }
 
-        // The first row is the header, e.g., ["original"]. We skip it.
         const urls = data.slice(1).map((row: string[]) => row[0]).filter(Boolean);
         
-        // Final client-side cleanup.
         const assetExtensions = /\.(css|js|json|xml|rss|atom|pdf|jpg|jpeg|png|gif|svg|webp|woff|woff2|ttf|eot|mp4|webm|mp3|ogg)$/i;
         const filteredUrls = urls.filter(url => !assetExtensions.test(new URL(url).pathname));
 
@@ -332,41 +365,90 @@ async function fetchUrlsFromWaybackMachine(siteUrl: string, onStatusUpdate: (mes
         return filteredUrls;
     } catch (e) {
         console.error("Wayback Machine API query failed:", e);
-        // This is a last resort, so if it fails, we don't throw, we just return empty.
-        // The calling function will then handle the "no URLs found" case.
         return [];
     }
 }
 
+/**
+ * REFACTORED: The core processing pipeline for any list of URLs.
+ * This function takes an array of URLs, validates them, fetches their SEO data,
+ * and performs the initial programmatic audit. It's now used by both the live
+ * crawler and the new file upload feature.
+ */
+export const processAndScanUrls = async (
+    urls: string[],
+    onProgress: (crawled: number, total: number) => void,
+    onStatusUpdate: (message: string) => void
+): Promise<SeoAnalysis[]> => {
+    const uniqueUrls = Array.from(new Set(urls));
+    if (uniqueUrls.length === 0) {
+        throw new Error("The list of URLs is empty or contains only duplicates.");
+    }
+
+    console.log(`Discovered ${uniqueUrls.length} unique URLs. Validating content types...`);
+    onStatusUpdate(`Found ${uniqueUrls.length} unique URLs. Validating which are HTML pages...`);
+    onProgress(0, uniqueUrls.length);
+
+    const validationResults = await processUrlsWithConcurrency(
+        uniqueUrls, validateUrl, 50, (c, t) => onProgress(c, t)
+    );
+    const pageUrls = validationResults.filter((result): result is string => result !== null);
+
+    if (pageUrls.length === 0) {
+        throw new Error("Found URLs, but none appear to be valid, crawlable HTML pages after filtering.");
+    }
+
+    console.log(`Validated ${pageUrls.length} crawlable HTML pages. Starting metadata extraction.`);
+    onStatusUpdate(`Extracting SEO data from ${pageUrls.length} validated pages...`);
+    onProgress(0, pageUrls.length);
+
+    const crawlFn = (pageUrl: string) =>
+        fetchAndParseHtml(pageUrl).then(data => ({ ...data, url: pageUrl }));
+
+    const results = await processUrlsWithConcurrency(pageUrls, crawlFn, 30, onProgress);
+    const validResults = results.filter((result): result is SeoData => result !== null);
+
+    if (validResults.length === 0) {
+        throw new Error("Crawled all validated URLs but could not retrieve SEO data from any of them. The site may be blocking the crawler.");
+    }
+
+    console.log(`Successfully processed ${validResults.length} pages.`);
+    onStatusUpdate(`Processing complete. Performing initial programmatic SEO audit...`);
+
+    const analyzedPages = performQuickScan(validResults);
+    
+    console.log(`Quick scan complete. Found actionable issues on several pages.`);
+    return analyzedPages;
+};
+
 
 /**
- * The main crawler function, orchestrating the state-of-the-art fetching and parsing logic.
- * This new engine is resilient to single-sitemap failures and intelligently falls back from user error.
+ * The main crawler function, now focused on URL *discovery*.
+ * It orchestrates the sitemap finding and parsing logic, then passes the
+ * resulting URL list to the new, unified `processAndScanUrls` pipeline.
  */
 export const crawlSite = async (
     url: string,
     sitemapUrl?: string,
     onProgress: (crawled: number, total: number) => void = () => {},
     onStatusUpdate: (message: string) => void = () => {}
-): Promise<SeoData[]> => {
+): Promise<SeoAnalysis[]> => {
     console.log(`Starting premium, resilient crawl for: ${url}`);
     
-    let allUrlsFromSitemaps: string[] = [];
+    let allUrls: string[] = [];
     let initialSitemapError: Error | null = null;
 
-    // TIER 1: Attempt to use the user-provided sitemap first.
     if (sitemapUrl) {
         onStatusUpdate(`Processing user-provided sitemap: ${sitemapUrl}`);
         try {
-            allUrlsFromSitemaps = await fetchAndParseSitemapLocation(sitemapUrl);
+            allUrls = await fetchAndParseSitemapLocation(sitemapUrl);
         } catch (e) {
             initialSitemapError = e as Error;
             console.warn(`User-provided sitemap failed. Reason: ${initialSitemapError.message}. Falling back to automatic discovery.`);
         }
     }
 
-    // TIER 2: If no sitemap was provided, or if the provided one failed, run automatic discovery.
-    if (allUrlsFromSitemaps.length === 0) {
+    if (allUrls.length === 0) {
         onStatusUpdate(sitemapUrl ? `User sitemap failed. Trying automatic discovery...` : `Starting automatic sitemap discovery...`);
         const sitemapLocations = await findSitemaps(url);
 
@@ -385,89 +467,41 @@ export const crawlSite = async (
             failedSitemaps.forEach(f => console.warn(`A discovered sitemap could not be processed:`, (f as PromiseRejectedResult).reason.message));
             
             if (successfulUrls.length === 0 && failedSitemaps.length > 0) {
-                // If all discovered sitemaps failed, we throw the reason for the first failure.
                 throw (failedSitemaps[0] as PromiseRejectedResult).reason;
             }
-            allUrlsFromSitemaps = successfulUrls;
+            allUrls = successfulUrls;
         }
     }
     
-    // TIER 3 & 4: ULTIMATE FAILSAFE LOGIC
-    if (allUrlsFromSitemaps.length === 0) {
+    if (allUrls.length === 0) {
         let liveCrawlError: Error | null = null;
         try {
             onStatusUpdate("Sitemap not found. Attempting to crawl links from the homepage as a fallback...");
-            allUrlsFromSitemaps = await extractInternalLinksFromUrl(url, onStatusUpdate);
+            allUrls = await extractInternalLinksFromUrl(url, onStatusUpdate);
         } catch (e) {
             console.error("Homepage Link Extraction with Google Cache also failed.", e);
             liveCrawlError = e as Error;
         }
 
-        // Activate Wayback Machine if homepage crawl failed OR returned no links
-        if (allUrlsFromSitemaps.length === 0) {
+        if (allUrls.length === 0) {
             onStatusUpdate("Live crawling failed. Activating deep index analysis via the Internet Archive...");
-            allUrlsFromSitemaps = await fetchUrlsFromWaybackMachine(url, onStatusUpdate);
+            allUrls = await fetchUrlsFromWaybackMachine(url, onStatusUpdate);
             
-             // If even the Wayback machine fails, now we throw the comprehensive error.
-            if (allUrlsFromSitemaps.length === 0) {
+             if (allUrls.length === 0) {
                 let errorMessage = "Failed to crawl the website. All live discovery methods and historical lookups failed.";
-                if (initialSitemapError) {
-                    errorMessage += ` The user-provided sitemap was unreachable.`;
-                } else {
-                    errorMessage += ` Automatic discovery found nothing.`;
-                }
-                if (liveCrawlError) {
-                     errorMessage += ` The fallback attempt to crawl the homepage also failed (Reason: ${liveCrawlError.message}).`;
-                }
-                errorMessage += ` A final attempt to query the Internet Archive's Wayback Machine also found no usable URLs for this domain. The site may be new, un-indexed, or completely inaccessible.`;
-                
+                if (initialSitemapError) errorMessage += ` The user-provided sitemap was unreachable.`;
+                else errorMessage += ` Automatic discovery found nothing.`;
+                if (liveCrawlError) errorMessage += ` The fallback attempt to crawl the homepage also failed (Reason: ${liveCrawlError.message}).`;
+                errorMessage += ` A final attempt to query the Internet Archive's Wayback Machine also found no usable URLs for this domain.`;
                 throw new Error(errorMessage);
             }
         }
     }
+
+    if (allUrls.length === 0) {
+        throw new Error("URL discovery was successful, but the source (sitemap or page) contained no URLs.");
+    }
     
-    // Deduplicate URLs before the expensive validation step
-    const uniqueUrls = Array.from(new Set(allUrlsFromSitemaps));
-
-    if (uniqueUrls.length === 0) {
-        throw new Error("Sitemap(s) were found and parsed, but they contained no URLs. Please check your sitemap configuration in WordPress.");
-    }
-
-    // STAGE 1: Ultra-fast validation of all URLs to find HTML pages
-    console.log(`Discovered ${uniqueUrls.length} unique URLs. Validating content types before full crawl...`);
-    const VALIDATION_CONCURRENCY_LIMIT = 50; // Use higher concurrency for lightweight HEAD requests.
-    onStatusUpdate(`Found ${uniqueUrls.length} unique URLs. Validating which are HTML pages...`);
-    onProgress(0, uniqueUrls.length);
-
-    const validationResults = await processUrlsWithConcurrency(
-        uniqueUrls,
-        validateUrl,
-        VALIDATION_CONCURRENCY_LIMIT,
-        (current, total) => onProgress(current, total) // Pass progress through
-    );
-
-    const pageUrls = validationResults.filter((result): result is string => result !== null);
-
-    if (pageUrls.length === 0) {
-        throw new Error("Found sitemap(s), but they contained no valid, crawlable HTML page URLs after filtering. The sitemap might only contain non-HTML resources (like images or PDFs), or the server may be blocking automated requests.");
-    }
-
-    // STAGE 2: Full, robust crawl of validated HTML pages
-    console.log(`Validated ${pageUrls.length} crawlable HTML pages. Starting metadata extraction.`);
-    onStatusUpdate(`Extracting SEO data from ${pageUrls.length} validated pages...`);
-    const CONCURRENCY_LIMIT = 30;
-    onProgress(0, pageUrls.length); // Reset progress for the crawling stage
-
-    const crawlFn = (pageUrl: string) =>
-        fetchAndParseHtml(pageUrl).then(data => ({ ...data, url: pageUrl }));
-
-    const results = await processUrlsWithConcurrency(pageUrls, crawlFn, CONCURRENCY_LIMIT, onProgress);
-    const validResults = results.filter((result): result is SeoData => result !== null);
-
-    if (validResults.length === 0) {
-        throw new Error("Crawled all validated URLs from the sitemap but could not retrieve SEO data from any of them. The site may be blocking the crawler, or have other accessibility issues.");
-    }
-
-    console.log(`Successfully crawled and processed ${validResults.length} pages.`);
-    return validResults;
+    // Hand off the discovered URLs to the unified processing pipeline.
+    return processAndScanUrls(allUrls, onProgress, onStatusUpdate);
 };

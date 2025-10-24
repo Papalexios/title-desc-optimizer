@@ -14,7 +14,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({ progress, label }) => 
             </div>
             <div className="w-full bg-slate-700 rounded-full h-2.5">
                 <div
-                    className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300 ease-out"
+                    className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300 ease-out progress-bar-animated"
                     style={{ width: `${progress}%` }}
                 ></div>
             </div>

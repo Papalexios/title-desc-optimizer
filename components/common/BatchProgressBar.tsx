@@ -17,7 +17,7 @@ export const BatchProgressBar: React.FC<BatchProgressBarProps> = ({ current, tot
                 </div>
                 <div className="w-full bg-slate-700 rounded-full h-2.5">
                     <div
-                        className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500 ease-out"
+                        className="bg-indigo-500 h-2.5 rounded-full transition-all duration-500 ease-out progress-bar-animated"
                         style={{ width: `${percentage}%` }}
                     ></div>
                 </div>

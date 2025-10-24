@@ -35,11 +35,6 @@ export const Header: React.FC<HeaderProps> = ({ isValidApi }) => {
                             </p>
                         </div>
                     </div>
-                    <nav className="hidden md:flex items-center space-x-4">
-                        <a href="#" className="px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700/50 hover:text-white rounded-md transition-colors">Dashboard</a>
-                        <a href="#" className="px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700/50 hover:text-white rounded-md transition-colors">Reports</a>
-                        <a href="#" className="px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700/50 hover:text-white rounded-md transition-colors">Settings</a>
-                    </nav>
                 </div>
             </div>
         </header>

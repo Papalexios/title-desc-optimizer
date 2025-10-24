@@ -1,9 +1,9 @@
-import { AiConfig, SeoAnalysis } from '../types';
-import { analyzeSeo, AnalysisResult, RateLimitError } from './aiService';
+import { AiConfig, SeoAnalysis, SeoData, RewriteSuggestion } from '../types';
+import { AnalysisResult, RateLimitError, runFullAnalysisAndSuggestion } from './aiService';
 
 // Type definitions for the balancer's event-driven system
 type ProgressCallback = (progress: { completed: number; total: number; activeWorkers: number }) => void;
-export type ResultCallback = (result: { url: string; analysis: AnalysisResult }) => void;
+export type ResultCallback = (result: { url: string; data: { analysis: AnalysisResult; suggestions: RewriteSuggestion[] } }) => void;
 type ErrorCallback = (url: string, error: Error) => void;
 
 interface Job {
@@ -25,8 +25,7 @@ export class AILoadBalancer {
     private workers: { config: AiConfig; status: 'ready' | 'busy' | 'coolingDown' }[];
     private totalJobs = 0;
     private completedJobs = 0;
-
-    // Event listeners
+    private analysisContext: { allPages: SeoData[], targetLocation?: string } = { allPages: [] };
     private onProgressCallback: ProgressCallback = () => {};
     private onResultCallback: ResultCallback = () => {};
     private onErrorCallback: ErrorCallback = () => {};
@@ -35,7 +34,6 @@ export class AILoadBalancer {
         this.workers = configs.map(config => ({ config, status: 'ready' }));
     }
 
-    // Public methods to subscribe to events
     public onProgress(callback: ProgressCallback) {
         this.onProgressCallback = callback;
     }
@@ -51,37 +49,36 @@ export class AILoadBalancer {
     /**
      * Adds a list of SEO data objects to the processing queue.
      * @param dataToAnalyze An array of pages to be analyzed.
+     * @param context An optional object containing sitewide data for deeper analysis.
      */
-    public async processQueue(dataToAnalyze: SeoAnalysis[]): Promise<void> {
+    public async processQueue(dataToAnalyze: SeoAnalysis[], context?: { allPages: SeoData[], targetLocation?: string }): Promise<void> {
         this.jobQueue = dataToAnalyze.map(data => ({ data, retries: 0 }));
         this.totalJobs = dataToAnalyze.length;
         this.completedJobs = 0;
+        this.analysisContext = context || { allPages: [] };
 
-        // Start processing the queue.
-        // We return a promise that resolves when the queue is empty.
         return new Promise(resolve => {
             const checkCompletion = () => {
                 if (this.completedJobs === this.totalJobs) {
                     resolve();
                 } else {
-                     // Check every 100ms if there are more jobs to process.
                     this.tryProcessNext();
                     setTimeout(checkCompletion, 100);
                 }
             };
-            this.tryProcessNext(); // Initial kick-off
+            this.tryProcessNext();
             checkCompletion();
         });
     }
 
     private tryProcessNext() {
         if (this.jobQueue.length === 0) {
-            return; // All jobs are either done or being processed
+            return;
         }
 
         const availableWorker = this.workers.find(w => w.status === 'ready');
         if (!availableWorker) {
-            return; // All workers are busy or cooling down
+            return;
         }
 
         const job = this.jobQueue.shift();
@@ -93,12 +90,11 @@ export class AILoadBalancer {
     
     private async processJob(job: Job, worker: { config: AiConfig; status: 'busy' | 'coolingDown' | 'ready' }) {
         try {
-            const analysis = await analyzeSeo(job.data.title, job.data.description, worker.config);
+            // Use the new, powerful orchestrator function.
+            const fullResult = await runFullAnalysisAndSuggestion(job.data, worker.config, this.analysisContext, this.analysisContext.targetLocation);
             
-            this.onResultCallback({ url: job.data.url, analysis });
+            this.onResultCallback({ url: job.data.url, data: fullResult });
             this.completedJobs++;
-            
-            // Job successful, worker is ready for more.
             worker.status = 'ready';
 
         } catch (error) {
@@ -106,25 +102,20 @@ export class AILoadBalancer {
 
             if (error instanceof RateLimitError) {
                 console.warn(`Worker ${worker.config.id} is rate-limited. Cooling down for ${COOLDOWN_MS / 1000}s.`);
-                // Put the worker in cool-down.
                 worker.status = 'coolingDown';
                 setTimeout(() => {
                     console.log(`Worker ${worker.config.id} is now ready after cool-down.`);
                     worker.status = 'ready';
                 }, COOLDOWN_MS);
-                
-                // Re-queue the job at the front of the line.
                 this.jobQueue.unshift(job);
 
             } else if (job.retries < MAX_RETRIES) {
-                // For other transient errors, retry.
                 job.retries++;
                 console.warn(`Job for ${job.data.url} failed. Retrying (${job.retries}/${MAX_RETRIES}). Error: ${err.message}`);
-                this.jobQueue.push(job); // Add to the back of the queue
+                this.jobQueue.push(job);
                 worker.status = 'ready';
 
             } else {
-                // Max retries reached, job has failed.
                 this.onErrorCallback(job.data.url, err);
                 this.completedJobs++;
                 worker.status = 'ready';
@@ -134,7 +125,6 @@ export class AILoadBalancer {
         const activeWorkers = this.workers.filter(w => w.status !== 'coolingDown').length;
         this.onProgressCallback({ completed: this.completedJobs, total: this.totalJobs, activeWorkers });
         
-        // After processing, immediately try to pick up the next job.
         this.tryProcessNext();
     }
 }

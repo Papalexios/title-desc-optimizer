@@ -7,6 +7,13 @@ interface WordPressCredsModalProps {
     initialUrl?: string;
 }
 
+const InfoIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+    </svg>
+);
+
+
 export const WordPressCredsModal: React.FC<WordPressCredsModalProps> = ({ onSave, onClose, initialUrl }) => {
     
     const getInitialSiteUrl = (fullUrl?: string) => {
@@ -81,6 +88,25 @@ export const WordPressCredsModal: React.FC<WordPressCredsModalProps> = ({ onSave
                                 <a href="https://wordpress.org/documentation/article/application-passwords/" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline ml-1">Learn How</a>
                             </p>
                         </div>
+
+                        <div className="p-4 bg-sky-900/50 border border-sky-500/50 rounded-lg text-sky-200 text-sm">
+                            <h4 className="font-semibold text-sky-300 flex items-center gap-2 mb-2">
+                                <InfoIcon />
+                                Important Prerequisite
+                            </h4>
+                            <div className="pl-7 space-y-2 text-xs">
+                                <p>
+                                    This tool updates meta tags for major SEO plugins (Yoast, Rank Math, AIOSEO) using the REST API.
+                                </p>
+                                <p>
+                                    For this to work, your WordPress site may require a one-time configuration to allow these fields to be updated externally. This is a default security feature of WordPress.
+                                </p>
+                                <a href="https://developer.wordpress.org/rest-api/extending-the-rest-api/registering-fields/#registering-meta-fields" target="_blank" rel="noopener noreferrer" className="text-indigo-300 hover:underline font-semibold">
+                                    Read the official WordPress developer docs on how to enable this &rarr;
+                                </a>
+                            </div>
+                        </div>
+
                         <div className="p-3 bg-yellow-900/50 border border-yellow-500/50 rounded-lg text-yellow-200 text-xs">
                             <strong>Security Note:</strong> Your credentials are sent directly from your browser to your WordPress site via a CORS proxy for this action and are not stored after you close this page.
                         </div>

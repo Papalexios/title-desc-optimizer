@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { RewriteSuggestion, AiConfig, AiProvider } from '../types';
+import { RewriteSuggestion, AiConfig, AiProvider, SeoAnalysis, SeoData, InternalLinkSuggestion, SerpResult } from '../types';
+import { fetchSerpData } from "./serpService";
 
 /**
  * Custom error class to specifically identify rate-limiting issues.
@@ -13,13 +14,13 @@ export class RateLimitError extends Error {
     }
 }
 
-// Schemas for Gemini's structured JSON output
-const analysisSchema = {
+// A new, comprehensive schema for deep SEO analysis.
+const deepAnalysisSchema = {
     type: Type.OBJECT,
     properties: {
         topic: {
             type: Type.STRING,
-            description: 'The main topic or primary keyword phrase of the page, inferred from the title and description.'
+            description: 'The main topic or primary keyword phrase of the page, inferred from the title, description, and content.'
         },
         titleAnalysis: {
             type: Type.OBJECT,
@@ -36,10 +37,43 @@ const analysisSchema = {
                 feedback: { type: Type.STRING, description: 'Concise, actionable feedback for the description (1-2 sentences).' }
             },
             required: ["grade", "feedback"]
+        },
+        readabilityAnalysis: {
+            type: Type.OBJECT,
+            properties: {
+                gradeLevel: { type: Type.NUMBER, description: 'The Flesch-Kincaid reading grade level of the content.' },
+                feedback: { type: Type.STRING, description: 'A brief, 1-sentence analysis of the readability and suggestions for improvement.' }
+            },
+            required: ["gradeLevel", "feedback"]
+        },
+        aeoAnalysis: { // Answer Engine Optimization
+            type: Type.OBJECT,
+            properties: {
+                feedback: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: '3-4 bullet points of actionable advice to improve the content for featured snippets and voice search (e.g., adding a Q&A section, using clearer headings).'
+                }
+            },
+            required: ["feedback"]
+        },
+        internalLinkAnalysis: {
+            type: Type.ARRAY,
+            description: 'Up to 3 strategic internal link suggestions to improve site structure and user flow.',
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    anchorText: { type: Type.STRING, description: 'A relevant phrase from the page content to use as anchor text.' },
+                    targetUrl: { type: Type.STRING, description: 'The most relevant internal URL to link to from the provided list of site URLs.' },
+                    rationale: { type: Type.STRING, description: 'A brief, 1-sentence explanation of why this link is valuable for SEO.' }
+                },
+                required: ["anchorText", "targetUrl", "rationale"]
+            }
         }
     },
-    required: ["topic", "titleAnalysis", "descriptionAnalysis"]
+    required: ["topic", "titleAnalysis", "descriptionAnalysis", "readabilityAnalysis", "aeoAnalysis", "internalLinkAnalysis"]
 };
+
 
 const suggestionSchema = {
     type: Type.ARRAY,
@@ -130,7 +164,6 @@ export const validateApiKey = async (config: AiConfig): Promise<boolean> => {
     try {
         switch (config.provider) {
             case 'gemini':
-                // Using API key directly as environment variables are not available in this context
                 const geminiAi = new GoogleGenAI({ apiKey: config.apiKey });
                 await geminiAi.models.generateContent({
                     model: "gemini-2.5-flash", contents: "hello", config: { thinkingConfig: { thinkingBudget: 0 } }
@@ -144,8 +177,7 @@ export const validateApiKey = async (config: AiConfig): Promise<boolean> => {
                     ...config,
                     model: config.model || (config.provider === 'openai' ? 'gpt-3.5-turbo' : 'llama3-8b-8192')
                 };
-                 // For Groq, Llama3 is a common fast model
-                if(config.provider === 'groq' && !config.model) testConfig.model = 'llama3-8b-8192';
+                 if(config.provider === 'groq' && !config.model) testConfig.model = 'llama3-8b-8192';
                 await executeOpenAiCompatibleChat(endpoint, testConfig, "ping", `{"type": "string"}`);
                 return true;
             default:
@@ -162,120 +194,191 @@ export type AnalysisResult = {
     titleGrade: number, 
     titleFeedback: string, 
     descriptionGrade: number, 
-    descriptionFeedback: string 
+    descriptionFeedback: string,
+    readabilityGrade?: number;
+    readabilityFeedback?: string;
+    aeoFeedback?: string[];
+    internalLinkSuggestions?: InternalLinkSuggestion[];
 };
 
 /**
  * Analyzes SEO data using a live call to the configured AI provider.
  */
-export const analyzeSeo = async (title: string, description: string, config: AiConfig): Promise<AnalysisResult> => {
-    const prompt = `
-        As an elite SEO analyst, perform a critical review of the following meta elements.
-        - Title: "${title}"
-        - Description: "${description}"
+const analyzeSeo = async (pageData: SeoAnalysis, config: AiConfig, context: { allPages: SeoData[] }): Promise<AnalysisResult> => {
+    const internalLinkCandidates = context.allPages
+        .filter(p => p.url !== pageData.url)
+        .map(p => `- URL: ${p.url}\n  Title: ${p.title}`)
+        .join('\n');
 
-        Your analysis must be sharp and actionable.
-        1.  **Infer Topic:** What is the primary user intent and core keyword phrase this page is targeting? Be specific.
-        2.  **Grade Title (0-100):** Evaluate based on modern SEO best practices: optimal length (50-60 chars), keyword prominence, clarity, and its power to compel a click from a savvy user.
-        3.  **Grade Description (0-100):** Evaluate based on its ability to support the title, expand on the core promise, meet user intent, and include a strong call-to-action. Length should be optimal (120-155 chars).
-        4.  **Feedback:** Provide concise, expert-level feedback for both elements.
-        Return your complete analysis in the required JSON format.
+    const prompt = `
+        As a world-class, data-driven SEO consultant, perform a comprehensive on-page analysis of the following webpage.
+
+        **Page Context:**
+        - URL: "${pageData.url}"
+        - Title: "${pageData.title}"
+        - Description: "${pageData.description}"
+        - Content Snippet (first 2000 chars): "${pageData.content.substring(0, 2000)}..."
+
+        **Your Analysis Tasks:**
+        1.  **Core Topic Identification:** Distill the page's primary topic into a concise keyword phrase.
+        2.  **Meta Tag Evaluation (0-100 Scale):**
+            -   **Title:** Grade based on length (under 60 chars), keyword placement, clarity, and click-through rate (CTR) potential.
+            -   **Description:** Grade based on length (under 155 chars), persuasiveness, and CTA inclusion.
+        3.  **Content Readability Analysis:** Determine the Flesch-Kincaid grade level and provide one sentence of feedback.
+        4.  **Answer Engine Optimization (AEO):** Provide 3-4 bullet points of high-impact advice for capturing Featured Snippets.
+        5.  **Strategic Internal Linking:** Identify up to 3 contextually relevant anchor texts from the content and match them with the most relevant URL from the provided list of internal candidates.
+
+        **Internal Link Candidates (The Website's Other Pages):**
+        ${internalLinkCandidates}
+
+        **CRITICAL:** Your final output must be a single, perfectly structured JSON object adhering to the provided schema.
     `;
     
-    try {
-        if (config.provider === 'gemini') {
-            const ai = new GoogleGenAI({ apiKey: config.apiKey });
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash", contents: prompt,
-                config: { responseMimeType: "application/json", responseSchema: analysisSchema },
-            });
-            const result = JSON.parse(response.text.trim());
+    if (config.provider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey: config.apiKey });
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", contents: prompt,
+            config: { responseMimeType: "application/json", responseSchema: deepAnalysisSchema },
+        });
+        const result = JSON.parse(response.text.trim());
+        return {
+            topic: result.topic,
+            titleGrade: result.titleAnalysis?.grade,
+            titleFeedback: result.titleAnalysis?.feedback,
+            descriptionGrade: result.descriptionAnalysis?.grade,
+            descriptionFeedback: result.descriptionAnalysis?.feedback,
+            readabilityGrade: result.readabilityAnalysis?.gradeLevel,
+            readabilityFeedback: result.readabilityAnalysis?.feedback,
+            aeoFeedback: result.aeoAnalysis?.feedback,
+            internalLinkSuggestions: result.internalLinkAnalysis,
+        };
+    } else {
+        const endpoint = providerApiEndpoints[config.provider];
+        const result = await executeOpenAiCompatibleChat<any>(endpoint, config, prompt, JSON.stringify(deepAnalysisSchema));
             return {
-                topic: result.topic || 'N/A',
-                titleGrade: result.titleAnalysis?.grade || 0,
-                titleFeedback: result.titleAnalysis?.feedback || 'No feedback provided.',
-                descriptionGrade: result.descriptionAnalysis?.grade || 0,
-                descriptionFeedback: result.descriptionAnalysis?.feedback || 'No feedback provided.'
-            };
-        } else {
-            const endpoint = providerApiEndpoints[config.provider];
-            const result = await executeOpenAiCompatibleChat<{ topic: string; titleAnalysis: { grade: number; feedback: string; }; descriptionAnalysis: { grade: number; feedback: string; };}>(endpoint, config, prompt, JSON.stringify(analysisSchema));
-             return {
-                topic: result.topic || 'N/A',
-                titleGrade: result.titleAnalysis?.grade || 0,
-                titleFeedback: result.titleAnalysis?.feedback || 'No feedback provided.',
-                descriptionGrade: result.descriptionAnalysis?.grade || 0,
-                descriptionFeedback: result.descriptionAnalysis?.feedback || 'No feedback provided.'
-            };
-        }
-    } catch (error) {
-        console.error(`Error analyzing SEO with ${config.provider} (${config.id}):`, error);
-        // Re-throw the error so the load balancer can handle it
-        throw error;
+            topic: result.topic,
+            titleGrade: result.titleAnalysis?.grade,
+            titleFeedback: result.titleAnalysis?.feedback,
+            descriptionGrade: result.descriptionAnalysis?.grade,
+            descriptionFeedback: result.descriptionAnalysis?.feedback,
+            readabilityGrade: result.readabilityAnalysis?.gradeLevel,
+            readabilityFeedback: result.readabilityAnalysis?.feedback,
+            aeoFeedback: result.aeoAnalysis?.feedback,
+            internalLinkSuggestions: result.internalLinkAnalysis,
+        };
     }
 };
 
 /**
  * Generates SEO suggestions using a live call to the configured AI provider.
  */
-export const generateSeoSuggestions = async (oldTitle: string, oldDescription: string, url: string, topic: string, config: AiConfig, targetLocation?: string): Promise<RewriteSuggestion[]> => {
+const generateSeoSuggestions = async (
+    pageData: SeoAnalysis,
+    analysisResult: AnalysisResult,
+    config: AiConfig,
+    serpData: SerpResult[],
+    targetLocation?: string
+): Promise<RewriteSuggestion[]> => {
     
     const geoInstruction = targetLocation
     ? `An important business goal is to rank for the target location: "${targetLocation}". Where it makes sense and feels natural, subtly incorporate this location or local-intent keywords (e.g., 'services in ${targetLocation}', 'near you') into your suggestions to capture local search traffic. Do not force the location if it makes the copy awkward or irrelevant.`
     : `This is for a global audience; do not use location-specific terms.`;
 
+    const competitorAnalysis = serpData.length > 0
+        ? `
+        **//-- CRUCIAL: Live SERP Competitive Intelligence --//**
+        Here are the top-ranking competitors for the target topic. You MUST analyze their titles and descriptions to identify patterns, weaknesses, and opportunities for differentiation.
+
+        ${serpData.map((result, i) => `
+        - Competitor #${i + 1}:
+          - Title: "${result.title}"
+          - Description: "${result.description}"
+        `).join('')}
+        
+        **//-- Strategic Analysis of Competitors --//**
+        Based on the live SERP data, identify the dominant search intent. Note any recurring elements (like dates, numbers, brackets, or specific keywords like 'review' or 'guide'). Your suggestions MUST be strategically superior and designed to stand out from this specific competition.`
+        : `**//-- No Competitor Data --//**
+        No live competitor data was available. Proceed based on general SEO best practices.`;
+
     const prompt = `
-        You are a world-class SEO strategist and direct-response copywriter, a true master of crafting meta tags that not only rank but also command the click. Your task is to produce three premium, expert-level rewrite suggestions for the following webpage. These suggestions must be a significant upgrade, not a minor tweak.
+        **//-- Persona --//**
+        You are a 10X SEO SERP Strategist, an expert at winning the click on the search results page. Your analysis is guided by Google's Helpful Content Update and E-E-A-T principles. You don't just write copy; you reverse-engineer the SERP to engineer snippets that dominate the competition.
 
-        **Webpage Context:**
-        - URL: ${url}
-        - AI-Identified Core Topic: "${topic}"
-        - Current Title: "${oldTitle}"
-        - Current Description: "${oldDescription}"
+        **//-- Your Page's Context --//**
+        - URL: ${pageData.url}
+        - AI-Identified Core Topic: "${analysisResult.topic}"
+        - Current Title: "${pageData.title}"
+        - Current Description: "${pageData.description}"
 
-        **Geo-Targeting Instructions:**
+        ${competitorAnalysis}
+
+        **//-- Geo-Targeting Instructions --//**
         ${geoInstruction}
 
-        **Your Mission:**
-        Generate 3 unique and compelling suggestions. For each suggestion, provide a new title, a new description, and a sharp rationale.
+        **//-- Mission: Generate 3 Elite-Tier, Competitively-Aware Suggestions --//**
+        Produce three distinct, world-class rewrite suggestions. Each suggestion must be a complete package: a new title, a new description, and an expert rationale that explicitly references how it improves upon the competition.
 
-        **CRITICAL REQUIREMENTS - Adhere to these strictly:**
-        1.  **Title (Under 60 chars):** Must be magnetic but not clickbait. Use power words, numbers, or questions to spark curiosity. It must promise a clear benefit and contain the primary keyword/topic. Your goal is maximum Click-Through Rate (CTR) from a qualified audience.
-        2.  **Description (Under 155 chars):** Must be persuasive and trustworthy. It must expand on the title's promise, build credibility, and include a strong, natural call-to-action (CTA). Address the user's core problem or desire with empathy. It must be a compelling summary that convinces the user this page has their answer.
-        3.  **Rationale (1 sentence):** Provide a concise, expert rationale for *why* your suggestion is superior from a modern SEO and copywriting perspective. For example: "This title uses a number to attract attention and a strong benefit-driven CTA in the description." or "Integrates the target location to capture high-intent local searchers."
-        4.  **Semantic SEO:** Ensure keywords are used naturally and semantically. The copy must read like it was written for a human first, search engine second. Avoid keyword stuffing.
-        5.  **Accuracy:** The suggestions must be 100% accurate and relevant to the page's topic. No generic or "placebo" content.
-        6.  **Output Format:** Your response must be a JSON array of objects, strictly following the provided schema. Do not deviate.
+        **//-- The Unbreakable Rules of Engagement --//**
+        For EACH of the 3 suggestions, you MUST adhere to the following:
+
+        1.  **Title (STRICTLY under 60 characters):**
+            -   **Beat The Competition:** Craft a title that is more compelling, more specific, or more helpful than the competitor titles provided.
+            -   **Benefit-Driven:** Promise a clear, tangible benefit or answer.
+        2.  **Description (STRICTLY under 155 characters):**
+            -   **Answer Engine Optimization (AEO):** The first sentence must be a concise summary that could serve as a direct answer.
+            -   **Signal Superior E-E-A-T:** Use language that builds more trust and authority than the competitors.
+            -   **Compelling CTA:** End with a natural call-to-action that encourages the click.
+        3.  **Rationale (1 sharp sentence):**
+            -   Provide a high-level, strategic justification that directly addresses the competitive landscape. Example: "This angle stands out by using a specific number instead of a generic 'Top X' like the competitors."
+
+        **//-- Final Command --//**
+        Your output must be a single, perfectly structured JSON array of objects, adhering to the provided schema. There will be no text, conversation, or explanations outside of this JSON object. Execute.
     `;
+    
+    if (config.provider === 'gemini') {
+        const ai = new GoogleGenAI({ apiKey: config.apiKey });
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", contents: prompt,
+            config: { responseMimeType: "application/json", responseSchema: suggestionSchema },
+        });
+        return JSON.parse(response.text.trim());
+    } else {
+            const endpoint = providerApiEndpoints[config.provider];
+            return await executeOpenAiCompatibleChat<RewriteSuggestion[]>(endpoint, config, prompt, JSON.stringify(suggestionSchema));
+    }
+};
 
+
+/**
+ * NEW SOTA Orchestrator: Combines deep analysis, live SERP scraping, and suggestion generation
+ * into a single, efficient operation. This is the primary function used by the load balancer.
+ */
+export const runFullAnalysisAndSuggestion = async (
+    pageData: SeoAnalysis,
+    config: AiConfig,
+    context: { allPages: SeoData[] },
+    targetLocation?: string
+): Promise<{ analysis: AnalysisResult; suggestions: RewriteSuggestion[] }> => {
     try {
-        let result: any;
+        // Step 1: Perform the deep SEO analysis to understand the page and its topic.
+        const analysis = await analyzeSeo(pageData, config, context);
 
-        if (config.provider === 'gemini') {
-            const ai = new GoogleGenAI({ apiKey: config.apiKey });
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash", contents: prompt,
-                config: { responseMimeType: "application/json", responseSchema: suggestionSchema },
-            });
-            result = JSON.parse(response.text.trim());
-        } else {
-             const endpoint = providerApiEndpoints[config.provider];
-             result = await executeOpenAiCompatibleChat<RewriteSuggestion[]>(endpoint, config, prompt, JSON.stringify(suggestionSchema));
-        }
+        // Step 2: Use the identified topic to fetch live, relevant competitor data.
+        const serpData = await fetchSerpData(analysis.topic, targetLocation);
 
-        // **Strict Zero-Tolerance Validation Layer**
-        // Ensure the result is a non-empty array and each item has the required properties.
-        if (Array.isArray(result) && result.length > 0 && result.every(item => item.title && item.description && item.rationale)) {
-            return result as RewriteSuggestion[];
-        } else {
-            console.warn("AI returned invalid, empty, or incomplete suggestions:", result);
+        // Step 3: Feed all context (original data, analysis, competitors) into the suggestion engine.
+        const suggestions = await generateSeoSuggestions(pageData, analysis, config, serpData, targetLocation);
+        
+        if (!Array.isArray(suggestions) || suggestions.length === 0) {
             throw new Error("AI failed to return valid, non-empty suggestions in the expected format.");
         }
 
+        return { analysis, suggestions };
+
     } catch (error) {
         const errorMessage = (error as Error).message;
-        console.error(`Error generating suggestions with ${config.provider}:`, errorMessage);
-        // Provide a clear, actionable error to the user.
-        throw new Error(`Failed to generate suggestions from ${config.provider}. Reason: ${errorMessage}`);
+        console.error(`Full analysis pipeline failed for ${pageData.url} with ${config.provider}:`, errorMessage);
+        // Re-throw the error to be handled by the AILoadBalancer's retry/error logic.
+        throw new Error(`AI processing failed: ${errorMessage}`);
     }
 };

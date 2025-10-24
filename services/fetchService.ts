@@ -1,12 +1,16 @@
 
-// A diversified list of CORS proxies, with `null` representing a direct fetch attempt.
-const PROXIES: (string | null)[] = [
-    null, // Priority #1: Attempt a direct fetch.
-    'https://cors.sh/',
-    'https://proxy.cors.sh/'
-    // Note: Other public proxies can be added here if needed, but are often less reliable.
-    // e.g., 'https://api.allorigins.win/raw?url='
+
+// A structured list of CORS proxies, defining how to construct the request URL for each.
+const PROXIES = [
+    { type: 'direct', endpoint: null, name: 'direct connection' },
+    // Prioritize more reliable proxies first
+    { type: 'query_param', endpoint: 'https://api.allorigins.win/raw?url=', name: 'api.allorigins.win' },
+    { type: 'prefix', endpoint: 'https://corsproxy.io/?', name: 'corsproxy.io' },
+    // Keep cors.sh as later fallbacks
+    { type: 'prefix', endpoint: 'https://cors.sh/', name: 'cors.sh' },
+    { type: 'prefix', endpoint: 'https://proxy.cors.sh/', name: 'proxy.cors.sh' },
 ];
+
 
 /**
  * A state-of-the-art, resilient fetch utility that attempts a direct connection first,
@@ -27,9 +31,22 @@ export async function robustFetch(
     let lastError: Error | null = null;
 
     for (const proxy of PROXIES) {
-        const isDirectFetch = proxy === null;
-        const requestUrl = isDirectFetch ? url : `${proxy}${encodeURIComponent(url)}`;
+        let requestUrl: string;
         
+        switch (proxy.type) {
+            case 'direct':
+                requestUrl = url;
+                break;
+            case 'prefix':
+                // For proxies like corsproxy.io/?https://... or cors.sh/https://...
+                requestUrl = `${proxy.endpoint}${url}`;
+                break;
+            case 'query_param':
+                 // For proxies like allorigins.win/raw?url=...
+                requestUrl = `${proxy.endpoint}${encodeURIComponent(url)}`;
+                break;
+        }
+
         try {
             const controller = new AbortController();
             const id = setTimeout(() => controller.abort(), timeout);
@@ -50,6 +67,7 @@ export async function robustFetch(
                 return response;
             }
             
+            console.log(`Successfully fetched ${url} via ${proxy.name}`);
             return response; // Success!
 
         } catch (error) {
@@ -61,11 +79,10 @@ export async function robustFetch(
             }
 
             // Provide intelligent feedback based on the context of the failure.
-            if (isDirectFetch && (err.name === 'TypeError' || err.message.includes('Failed to fetch'))) {
+            if (proxy.type === 'direct' && (err.name === 'TypeError' || err.message.includes('Failed to fetch'))) {
                  console.warn(`Direct fetch for ${url} failed, likely due to a CORS policy. This is normal. Trying CORS proxies...`);
             } else {
-                const source = isDirectFetch ? 'direct connection' : new URL(proxy!).hostname;
-                console.warn(`Fetch via ${source} failed for ${url}. Reason: ${reason}. Trying next...`);
+                console.warn(`Fetch via ${proxy.name} failed for ${url}. Reason: ${reason}. Trying next...`);
             }
         }
     }
