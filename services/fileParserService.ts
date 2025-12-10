@@ -1,13 +1,26 @@
 // services/fileParserService.ts
 
 /**
- * Checks if a given string is a plausible, absolute HTTP/HTTPS URL.
+ * Checks if a given string is a plausible, absolute HTTP/HTTPS URL and NOT an image/asset.
  */
 const isValidUrl = (str: string): boolean => {
     if (!str) return false;
     try {
         const url = new URL(str);
-        return url.protocol === 'http:' || url.protocol === 'https:';
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+
+        // Strict Asset Filtering
+        const lowerPath = url.pathname.toLowerCase();
+        const ignoredExtensions = [
+            '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico', 
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip',
+            '.css', '.js', '.json', '.xml', '.mp4', '.mp3'
+        ];
+        
+        if (lowerPath.includes('/wp-content/uploads/')) return false;
+        if (ignoredExtensions.some(ext => lowerPath.endsWith(ext))) return false;
+
+        return true;
     } catch (_) {
         return false;
     }

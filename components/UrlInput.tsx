@@ -16,10 +16,10 @@ const TabButton: React.FC<{ active: boolean; onClick: () => void; children: Reac
     return (
         <button
             onClick={onClick}
-            className={`flex items-center justify-center px-4 py-3 text-sm font-semibold w-1/2 transition-colors duration-200 focus:outline-none ${
+            className={`flex items-center justify-center px-4 py-4 text-sm font-bold w-1/2 transition-all duration-300 focus:outline-none ${
                 active
-                    ? 'text-indigo-300 border-b-2 border-indigo-400'
-                    : 'text-slate-400 hover:text-white border-b-2 border-transparent'
+                    ? 'text-indigo-300 bg-slate-800/50 border-b-2 border-indigo-500 shadow-inner'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/30 border-b-2 border-transparent'
             }`}
         >
             {children}
@@ -75,82 +75,98 @@ export const UrlInput: React.FC<UrlInputProps> = ({ onCrawl, onProcessFile, isLo
 
 
     return (
-        <div className="bg-slate-800/50 rounded-xl border border-slate-700 shadow-lg mt-6">
-            <div className="flex border-b border-slate-700">
-                <TabButton active={activeTab === 'crawl'} onClick={() => setActiveTab('crawl')}>
-                    <GlobeIcon /> Crawl Live Site
-                </TabButton>
-                <TabButton active={activeTab === 'upload'} onClick={() => setActiveTab('upload')}>
-                    <UploadIcon /> Upload File
-                </TabButton>
+        <div className="mt-12 mb-16 relative">
+            {/* Hero Text */}
+            <div className="text-center mb-10 space-y-4">
+                <h2 className="text-5xl font-extrabold text-white tracking-tight">
+                    Serp<span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-400">Quantum</span>
+                </h2>
+                <p className="text-lg text-slate-400 max-w-2xl mx-auto">
+                    The World's Most Advanced <strong>Autonomous SEO Engine</strong>. Deploy graph-aware AI agents to analyze, self-correct, and optimize your content strategy at scale.
+                </p>
             </div>
-            
-            <div className="p-6">
-                {activeTab === 'crawl' && (
-                    <form onSubmit={handleCrawlSubmit} className="space-y-4">
-                        <p className="text-center text-slate-400 mb-6">Enter your site URL. The crawler will attempt to find and process your entire sitemap.</p>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="md:col-span-2">
-                                <label htmlFor="url" className="sr-only">Main site URL</label>
-                                <input id="url" type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-wordpress-site.com"
-                                    className="w-full px-4 py-3 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow text-white"
-                                    disabled={isLoading} />
-                            </div>
-                            <div className="md:col-span-1">
-                                <label htmlFor="targetLocationCrawl" className="sr-only">Target Location</label>
-                                <input id="targetLocationCrawl" type="text" value={targetLocation} onChange={(e) => setTargetLocation(e.target.value)} placeholder="Target Location (e.g., London)"
-                                    className="w-full px-4 py-3 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow text-white"
-                                    disabled={isLoading} />
-                            </div>
-                        </div>
-                        <label htmlFor="sitemapUrl" className="sr-only">Sitemap URL</label>
-                        <input id="sitemapUrl" type="text" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} placeholder="Sitemap URL (optional, if auto-discovery fails)"
-                            className="w-full px-4 py-3 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow text-white"
-                            disabled={isLoading} />
-                        <div className="flex justify-end">
-                            <button type="submit" disabled={isLoading || !url || !isApiConfigured}
-                                className="flex items-center justify-center px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200"
-                                title={!isApiConfigured ? 'Please configure your API key first' : 'Crawl your website'}>
-                                {isLoading ? <Spinner /> : 'Crawl Site'}
-                                {!isLoading && <ArrowRightIcon />}
-                            </button>
-                        </div>
-                    </form>
-                )}
-                
-                {activeTab === 'upload' && (
-                    <form onSubmit={handleProcessFileSubmit} className="space-y-4">
-                         <p className="text-center text-slate-400 mb-6">Upload a file containing a list of URLs for analysis. Supported formats: .xml, .csv, .txt</p>
-                         
-                         <label
-                            className="flex flex-col items-center justify-center w-full h-32 px-4 transition bg-slate-900 border-2 border-slate-600 border-dashed rounded-md appearance-none cursor-pointer hover:border-slate-500 focus:outline-none"
-                            onDragOver={handleDragOver}
-                            onDrop={handleDrop}
-                          >
-                            <span className="flex items-center space-x-2">
-                               <UploadIcon />
-                                <span className="font-medium text-slate-300">
-                                    {selectedFile ? selectedFile.name : <>Drop files to attach, or <span className="text-indigo-400 underline">browse</span></>}
-                                </span>
-                            </span>
-                            <input type="file" name="file_upload" className="hidden" accept=".xml,.csv,.txt" onChange={handleFileChange} />
-                        </label>
 
-                         <label htmlFor="targetLocationUpload" className="sr-only">Target Location</label>
-                         <input id="targetLocationUpload" type="text" value={targetLocation} onChange={(e) => setTargetLocation(e.target.value)} placeholder="Target Location (e.g., London)"
-                            className="w-full px-4 py-3 bg-slate-900 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow text-white"
-                            disabled={isLoading} />
-                            
-                         <div className="flex justify-end">
-                            <button type="submit" disabled={isLoading || !selectedFile || !isApiConfigured}
-                                className="flex items-center justify-center px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200"
-                                title={!isApiConfigured ? 'Please configure your API key first' : 'Process the uploaded file'}>
-                                {isLoading ? <Spinner /> : 'Process File'}
+            <div className="max-w-3xl mx-auto bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-700/50 shadow-2xl overflow-hidden relative">
+                {/* Glow Effect */}
+                <div className="absolute -top-32 -left-32 w-64 h-64 bg-indigo-500/20 rounded-full blur-[80px]"></div>
+                <div className="absolute -bottom-32 -right-32 w-64 h-64 bg-purple-500/20 rounded-full blur-[80px]"></div>
+
+                <div className="flex border-b border-slate-700/50 relative z-10">
+                    <TabButton active={activeTab === 'crawl'} onClick={() => setActiveTab('crawl')}>
+                        <GlobeIcon /> Live Site Crawl
+                    </TabButton>
+                    <TabButton active={activeTab === 'upload'} onClick={() => setActiveTab('upload')}>
+                        <UploadIcon /> Batch File Upload
+                    </TabButton>
+                </div>
+                
+                <div className="p-8 relative z-10">
+                    {activeTab === 'crawl' && (
+                        <form onSubmit={handleCrawlSubmit} className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                <div className="md:col-span-2 group">
+                                    <label htmlFor="url" className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Target Website URL</label>
+                                    <input id="url" type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-wordpress-site.com"
+                                        className="w-full px-4 py-3.5 bg-slate-800 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-white placeholder-slate-600"
+                                        disabled={isLoading} />
+                                </div>
+                                <div className="md:col-span-1">
+                                    <label htmlFor="targetLocationCrawl" className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Target Geo (Optional)</label>
+                                    <input id="targetLocationCrawl" type="text" value={targetLocation} onChange={(e) => setTargetLocation(e.target.value)} placeholder="e.g. USA, London"
+                                        className="w-full px-4 py-3.5 bg-slate-800 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-white placeholder-slate-600"
+                                        disabled={isLoading} />
+                                </div>
+                            </div>
+                            <div>
+                                <label htmlFor="sitemapUrl" className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Sitemap URL (Optional)</label>
+                                <input id="sitemapUrl" type="text" value={sitemapUrl} onChange={(e) => setSitemapUrl(e.target.value)} placeholder="Auto-detect if empty"
+                                    className="w-full px-4 py-3.5 bg-slate-800 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-white placeholder-slate-600"
+                                    disabled={isLoading} />
+                            </div>
+                            <button type="submit" disabled={isLoading || !url || !isApiConfigured}
+                                className="w-full flex items-center justify-center px-6 py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-lg font-bold rounded-xl shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:-translate-y-0.5"
+                                title={!isApiConfigured ? 'Please configure your API key first' : 'Initialize Autonomous Agent'}>
+                                {isLoading ? <Spinner /> : 'Initialize Quantum Audit'}
                                 {!isLoading && <ArrowRightIcon />}
                             </button>
-                        </div>
-                    </form>
-                )}
+                        </form>
+                    )}
+                    
+                    {activeTab === 'upload' && (
+                        <form onSubmit={handleProcessFileSubmit} className="space-y-6">
+                             <label
+                                className="flex flex-col items-center justify-center w-full h-40 px-4 transition-all bg-slate-800/50 border-2 border-slate-600 border-dashed rounded-xl appearance-none cursor-pointer hover:border-indigo-500 hover:bg-slate-800 group"
+                                onDragOver={handleDragOver}
+                                onDrop={handleDrop}
+                              >
+                                <span className="flex flex-col items-center space-y-2">
+                                   <div className="p-3 bg-slate-700 rounded-full group-hover:bg-indigo-600 transition-colors">
+                                        <UploadIcon />
+                                   </div>
+                                    <span className="font-medium text-slate-300 group-hover:text-white transition-colors">
+                                        {selectedFile ? selectedFile.name : 'Drop XML, CSV, or TXT file here'}
+                                    </span>
+                                    <span className="text-xs text-slate-500">Supports sitemaps & URL lists</span>
+                                </span>
+                                <input type="file" name="file_upload" className="hidden" accept=".xml,.csv,.txt" onChange={handleFileChange} />
+                            </label>
+
+                             <div>
+                                <label htmlFor="targetLocationUpload" className="block text-xs font-bold text-slate-500 uppercase mb-1.5 ml-1">Target Geo (Optional)</label>
+                                <input id="targetLocationUpload" type="text" value={targetLocation} onChange={(e) => setTargetLocation(e.target.value)} placeholder="e.g. USA, London"
+                                    className="w-full px-4 py-3.5 bg-slate-800 border border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-white placeholder-slate-600"
+                                    disabled={isLoading} />
+                             </div>
+                                
+                             <button type="submit" disabled={isLoading || !selectedFile || !isApiConfigured}
+                                className="w-full flex items-center justify-center px-6 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-lg font-bold rounded-xl shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:-translate-y-0.5"
+                                title={!isApiConfigured ? 'Please configure your API key first' : 'Process file'}>
+                                {isLoading ? <Spinner /> : 'Ingest Data & Begin Analysis'}
+                                {!isLoading && <ArrowRightIcon />}
+                            </button>
+                        </form>
+                    )}
+                </div>
             </div>
         </div>
     );

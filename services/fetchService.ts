@@ -6,7 +6,6 @@ const PROXIES = [
     // Prioritize more reliable proxies first
     { type: 'query_param', endpoint: 'https://api.allorigins.win/raw?url=', name: 'api.allorigins.win' },
     { type: 'prefix', endpoint: 'https://corsproxy.io/?', name: 'corsproxy.io' },
-    // Keep cors.sh as later fallbacks
     { type: 'prefix', endpoint: 'https://cors.sh/', name: 'cors.sh' },
     { type: 'prefix', endpoint: 'https://proxy.cors.sh/', name: 'proxy.cors.sh' },
 ];
@@ -60,33 +59,21 @@ export async function robustFetch(
             
             if (!response.ok) {
                 if (throwOnHttpError) {
-                     // Throw an error to be caught by the retry logic in the calling function, or to fail fast.
-                     throw new Error(`Request failed with status: ${response.status} ${response.statusText}`);
+                     throw new Error(`Request failed with status: ${response.status}`);
                 }
-                // If not throwing, the caller is responsible for checking response.ok
                 return response;
             }
             
-            console.log(`Successfully fetched ${url} via ${proxy.name}`);
+            // console.log(`Successfully fetched ${url} via ${proxy.name}`); // Silenced for SOTA efficiency
             return response; // Success!
 
         } catch (error) {
             lastError = error as Error;
-            const err = error as Error;
-            let reason = err.message;
-            if (err.name === 'AbortError') {
-                reason = `Request timed out after ${timeout / 1000}s.`;
-            }
-
-            // Provide intelligent feedback based on the context of the failure.
-            if (proxy.type === 'direct' && (err.name === 'TypeError' || err.message.includes('Failed to fetch'))) {
-                 console.warn(`Direct fetch for ${url} failed, likely due to a CORS policy. This is normal. Trying CORS proxies...`);
-            } else {
-                console.warn(`Fetch via ${proxy.name} failed for ${url}. Reason: ${reason}. Trying next...`);
-            }
+            // console.warn(`Fetch via ${proxy.name} failed for ${url}. Trying next...`); // Silenced for SOTA efficiency
         }
     }
     
-    // If all attempts have been exhausted
-    throw lastError ?? new Error(`All fetch attempts (direct and through proxies) failed for the URL: ${url}. The target server might be down, blocking all requests, or there could be a network issue.`);
+    // Only log the final error if absolute failure
+    console.error(`All fetch attempts failed for: ${url}`);
+    throw lastError ?? new Error(`All fetch attempts failed for the URL: ${url}`);
 }

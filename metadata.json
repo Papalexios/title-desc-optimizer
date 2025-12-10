@@ -1,5 +1,5 @@
 {
-  "name": "WP SEO Optimizer AI",
-  "description": "An AI-powered application to analyze, grade, and rewrite SEO meta titles and descriptions for WordPress websites by crawling their sitemaps, aiming to boost organic traffic and rankings.",
+  "name": "SerpQuantum AI",
+  "description": "State-of-the-Art Autonomous SEO Engine using Graph RAG and Reflexion agents to optimize WordPress sites for AEO and GEO.",
   "requestFramePermissions": []
 }

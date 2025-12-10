@@ -1,31 +1,30 @@
-import { AiConfig, SeoAnalysis, SeoData, RewriteSuggestion } from '../types';
+import { AiConfig, SeoAnalysis, SeoData, RewriteSuggestion, SerpResult } from '../types';
 import { AnalysisResult, RateLimitError, runFullAnalysisAndSuggestion } from './aiService';
 
-// Type definitions for the balancer's event-driven system
 type ProgressCallback = (progress: { completed: number; total: number; activeWorkers: number }) => void;
 export type ResultCallback = (result: { url: string; data: { analysis: AnalysisResult; suggestions: RewriteSuggestion[] } }) => void;
 type ErrorCallback = (url: string, error: Error) => void;
 
-interface Job {
+export interface Job {
     data: SeoAnalysis;
     retries: number;
+    serpData: SerpResult[];
+    topicCluster: { url: string; title: string; intent?: string }[];
 }
 
 const MAX_RETRIES = 2;
 const COOLDOWN_MS = 60 * 1000; // 60 seconds
 
-/**
- * An "ultra-adaptive" AI Load Balancer.
- * This SOTA engine manages a pool of AI configurations (workers) to process analysis jobs in parallel.
- * It intelligently handles rate-limiting by putting affected workers on a timeout and redistributing
- * their work, creating a resilient and self-healing system for maximum throughput.
- */
 export class AILoadBalancer {
     private jobQueue: Job[] = [];
     private workers: { config: AiConfig; status: 'ready' | 'busy' | 'coolingDown' }[];
     private totalJobs = 0;
     private completedJobs = 0;
     private analysisContext: { allPages: SeoData[], targetLocation?: string } = { allPages: [] };
+    
+    // Optimization: Index pages by topic for O(1) Graph RAG lookup
+    private topicIndex = new Map<string, { url: string; title: string; intent: string }[]>();
+
     private onProgressCallback: ProgressCallback = () => {};
     private onResultCallback: ResultCallback = () => {};
     private onErrorCallback: ErrorCallback = () => {};
@@ -34,28 +33,30 @@ export class AILoadBalancer {
         this.workers = configs.map(config => ({ config, status: 'ready' }));
     }
 
-    public onProgress(callback: ProgressCallback) {
-        this.onProgressCallback = callback;
-    }
+    public onProgress(callback: ProgressCallback) { this.onProgressCallback = callback; }
+    public onResult(callback: ResultCallback) { this.onResultCallback = callback; }
+    public onError(callback: ErrorCallback) { this.onErrorCallback = callback; }
 
-    public onResult(callback: ResultCallback) {
-        this.onResultCallback = callback;
-    }
-
-    public onError(callback: ErrorCallback) {
-        this.onErrorCallback = callback;
-    }
-
-    /**
-     * Adds a list of SEO data objects to the processing queue.
-     * @param dataToAnalyze An array of pages to be analyzed.
-     * @param context An optional object containing sitewide data for deeper analysis.
-     */
-    public async processQueue(dataToAnalyze: SeoAnalysis[], context?: { allPages: SeoData[], targetLocation?: string }): Promise<void> {
-        this.jobQueue = dataToAnalyze.map(data => ({ data, retries: 0 }));
-        this.totalJobs = dataToAnalyze.length;
+    public async processQueue(jobs: Job[], context?: { allPages: SeoData[], targetLocation?: string }): Promise<void> {
+        this.jobQueue = jobs;
+        this.totalJobs = jobs.length;
         this.completedJobs = 0;
         this.analysisContext = context || { allPages: [] };
+
+        // Pre-compute topic index for speed
+        this.topicIndex.clear();
+        this.analysisContext.allPages.forEach(p => {
+             const analysis = p as SeoAnalysis;
+             const topic = analysis.topic || 'Uncategorized';
+             if (!this.topicIndex.has(topic)) {
+                 this.topicIndex.set(topic, []);
+             }
+             this.topicIndex.get(topic)!.push({
+                 url: p.url,
+                 title: p.title,
+                 intent: analysis.searchIntent || 'informational'
+             });
+        });
 
         return new Promise(resolve => {
             const checkCompletion = () => {
@@ -72,15 +73,9 @@ export class AILoadBalancer {
     }
 
     private tryProcessNext() {
-        if (this.jobQueue.length === 0) {
-            return;
-        }
-
+        if (this.jobQueue.length === 0) return;
         const availableWorker = this.workers.find(w => w.status === 'ready');
-        if (!availableWorker) {
-            return;
-        }
-
+        if (!availableWorker) return;
         const job = this.jobQueue.shift();
         if (job) {
             availableWorker.status = 'busy';
@@ -90,8 +85,27 @@ export class AILoadBalancer {
     
     private async processJob(job: Job, worker: { config: AiConfig; status: 'busy' | 'coolingDown' | 'ready' }) {
         try {
-            // Use the new, powerful orchestrator function.
-            const fullResult = await runFullAnalysisAndSuggestion(job.data, worker.config, this.analysisContext, this.analysisContext.targetLocation);
+            // SOTA UPGRADE: High-Speed Graph Context Injection
+            // Uses the pre-computed index for O(1) access instead of filtering the whole array.
+            const topic = job.data.topic || 'Uncategorized';
+            const allSiblings = this.topicIndex.get(topic) || [];
+            
+            // Filter out self and take top 10
+            const clusterSiblings = allSiblings
+                .filter(p => p.url !== job.data.url)
+                .slice(0, 10);
+
+            const fullResult = await runFullAnalysisAndSuggestion(
+                job.data,
+                worker.config,
+                { 
+                    allPages: this.analysisContext.allPages, 
+                    // Pass the calculated graph context, fallback to job's basic cluster if needed
+                    topicCluster: clusterSiblings.length > 0 ? clusterSiblings : job.topicCluster 
+                },
+                job.serpData,
+                this.analysisContext.targetLocation
+            );
             
             this.onResultCallback({ url: job.data.url, data: fullResult });
             this.completedJobs++;
@@ -99,22 +113,16 @@ export class AILoadBalancer {
 
         } catch (error) {
             const err = error as Error;
-
             if (error instanceof RateLimitError) {
-                console.warn(`Worker ${worker.config.id} is rate-limited. Cooling down for ${COOLDOWN_MS / 1000}s.`);
+                console.warn(`Worker ${worker.config.id} is rate-limited. Cooling down...`);
                 worker.status = 'coolingDown';
-                setTimeout(() => {
-                    console.log(`Worker ${worker.config.id} is now ready after cool-down.`);
-                    worker.status = 'ready';
-                }, COOLDOWN_MS);
+                setTimeout(() => { worker.status = 'ready'; }, COOLDOWN_MS);
                 this.jobQueue.unshift(job);
-
             } else if (job.retries < MAX_RETRIES) {
                 job.retries++;
                 console.warn(`Job for ${job.data.url} failed. Retrying (${job.retries}/${MAX_RETRIES}). Error: ${err.message}`);
                 this.jobQueue.push(job);
                 worker.status = 'ready';
-
             } else {
                 this.onErrorCallback(job.data.url, err);
                 this.completedJobs++;
@@ -124,7 +132,6 @@ export class AILoadBalancer {
         
         const activeWorkers = this.workers.filter(w => w.status !== 'coolingDown').length;
         this.onProgressCallback({ completed: this.completedJobs, total: this.totalJobs, activeWorkers });
-        
         this.tryProcessNext();
     }
 }

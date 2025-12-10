@@ -6,7 +6,7 @@ export interface SeoData {
     content: string; // The main content of the page
 }
 
-// NEW: Represents the results of a fast, programmatic (non-AI) SEO check.
+// Represents the results of a fast, programmatic (non-AI) SEO check.
 export interface QuickScanResult {
     isTitleMissing: boolean;
     isTitleTooLong: boolean;
@@ -23,38 +23,58 @@ export interface InternalLinkSuggestion {
     anchorText: string;
     targetUrl: string;
     rationale: string;
+    linkType?: 'contextual' | 'navigational' | 'pillar';
 }
 
 // The complete, all-in-one data object for a page, including its analysis and rewrite suggestions.
 export interface SeoAnalysis extends SeoData {
-    // Per-URL status tracking for a more granular and clear UI.
-    status: 'crawled' | 'scanned' | 'analyzing' | 'analyzed' | 'updating' | 'synced' | 'error';
-    
-    // NEW: A list of specific issues found during the programmatic "Quick Scan".
+    status: 'discovered' | 'scanned' | 'analyzing' | 'analyzed' | 'updating' | 'synced' | 'error';
     issues: string[];
-
-    // NEW: Detailed results from the quick scan.
     quickScan?: QuickScanResult;
-    
-    // Core SEO analysis results from the AI.
-    grade?: number; // Overall grade
+    grade?: number;
     titleGrade?: number;
     titleFeedback?: string;
     descriptionGrade?: number;
     descriptionFeedback?: string;
-    topic?: string;
-
-    // Deep content analysis fields from the AI.
     readabilityGrade?: number;
     readabilityFeedback?: string;
-    aeoFeedback?: string[];
     internalLinkSuggestions?: InternalLinkSuggestion[];
-    
-    // AI-generated rewrite suggestions are now stored directly with the page data.
     suggestions?: RewriteSuggestion[];
-    
-    // Field to store any errors that occur during analysis for a specific URL.
     analysisError?: string;
+
+    // SOTA fields from new aiService
+    primaryTopic?: string;
+    topic?: string; 
+    semanticKeywords?: string[];
+    searchIntent?: 'informational' | 'navigational' | 'transactional' | 'commercial';
+    contentDepth?: {
+        grade: number;
+        wordCount: number;
+        topicalCoverage: number;
+        expertiseSignals?: string[];
+        contentGaps?: string[];
+    };
+    featuredSnippetPotential?: {
+        score: number;
+        currentFormat?: string;
+        recommendedFormat: string;
+        optimizationSteps?: string[];
+    };
+    aeoOptimization?: {
+        paaQuestions?: string[];
+        voiceSearchOptimization?: string[];
+        structuredDataSuggestions?: string[];
+    };
+    competitiveAdvantage?: {
+        strengths?: string[];
+        weaknesses?: string[];
+        opportunities?: string[];
+    };
+
+    // New fields for prioritization and bulk review
+    priorityScore?: number; // 0-100 score for prioritization
+    pendingSuggestion?: RewriteSuggestion; // The top AI suggestion pending review
+    semanticDiff?: string[]; // Explanation of why the new suggestion is better
 }
 
 // A single AI-generated rewrite suggestion.
@@ -62,6 +82,13 @@ export interface RewriteSuggestion {
     title: string;
     description: string;
     rationale: string;
+    competitiveDifferentiator?: string;
+    clickThroughOptimization?: {
+        emotionalHooks?: string[];
+        urgency?: boolean;
+        specificity?: string;
+    };
+    expectedCtrLift?: string;
 }
 
 // Data structure for a live competitor result from a SERP scrape.
@@ -70,6 +97,15 @@ export interface SerpResult {
     url: string;
     description: string;
 }
+
+// NEW: Represents a semantic cluster of pages on the site.
+export interface TopicCluster {
+    topic: string;
+    pages: SeoAnalysis[];
+    pageCount: number;
+    analyzedCount: number;
+}
+
 
 // Defines the supported AI providers.
 export type AiProvider = 'gemini' | 'openai' | 'openrouter' | 'groq';
@@ -91,4 +127,4 @@ export interface WordPressCreds {
 }
 
 // Filter types for the data table.
-export type GradeFilter = 'all' | 'good' | 'average' | 'poor';
+export type GradeFilter = 'all' | 'good' | 'average' | 'poor' | 'no_grade';

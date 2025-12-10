@@ -1,42 +1,80 @@
-import React, { useState, useCallback, useMemo } from 'react';
+
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { UrlInput } from './components/UrlInput';
 import { SeoDataTable } from './components/SeoDataTable';
-import { RewriteModal } from './components/RewriteModal';
-import { SeoAnalysis, AiConfig, WordPressCreds, GradeFilter } from './types';
+import { SeoAnalysis, AiConfig, WordPressCreds, RewriteSuggestion, TopicCluster } from './types';
 import { crawlSite, processAndScanUrls } from './services/crawlerService';
 import { parseFileForUrls } from './services/fileParserService';
-import { AILoadBalancer } from './services/aiLoadBalancer';
+import { AILoadBalancer, Job } from './services/aiLoadBalancer';
 import { updateSeoOnWordPress } from './services/wordpressService';
 import { ApiConfig } from './components/ApiConfig';
 import { WordPressCredsModal } from './components/WordPressCredsModal';
 import { Dashboard } from './components/Dashboard';
-import { SeoDataTableControls } from './components/SeoDataTableControls';
 import { ProgressBar } from './components/common/ProgressBar';
 import Footer from './components/Footer';
+import { extractTopicsForClustering, calculatePriorityScore } from './services/aiService';
+import { fetchSerpData } from './services/serpService';
+import { cacheService } from './services/cacheService';
+import { SiteStructurePanel } from './components/SiteStructurePanel';
+import { DetailPanel } from './components/DetailPanel';
+import { ReviewAndSyncPanel } from './components/ReviewAndSyncPanel';
+import { BulkOperationsPanel } from './components/BulkOperationsPanel';
+
 
 const App: React.FC = () => {
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    type ViewMode = 'dashboard' | 'review';
+    type AuditStage = 'idle' | 'crawling' | 'clustering' | 'analyzing' | 'prioritizing' | 'complete';
+
+    // Core State
+    const [seoData, setSeoData] = useState<SeoAnalysis[]>([]);
+    const [topicClusters, setTopicClusters] = useState<TopicCluster[]>([]);
+    const [aiConfigs, setAiConfigs] = useState<AiConfig[]>([]);
+    const [wpCreds, setWpCreds] = useState<WordPressCreds | null>(null);
+
+    // UI & Flow State
+    const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+    const [auditStage, setAuditStage] = useState<AuditStage>('idle');
+    const [error, setError] = useState<string | null>(null);
+    const [activeDetailUrl, setActiveDetailUrl] = useState<string | null>(null);
+    const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set<string>());
+    
+    // Progress & Status State
+    const [progress, setProgress] = useState<{ processed: number, total: number, stage: string } | null>(null);
+    const [processStatus, setProcessStatus] = useState<string | null>(null);
     const [isUpdatingWp, setIsUpdatingWp] = useState(false);
     const [isAwaitingWpCreds, setIsAwaitingWpCreds] = useState(false);
-
-    const [seoData, setSeoData] = useState<SeoAnalysis[]>([]);
-    const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
-    const [modalData, setModalData] = useState<SeoAnalysis | null>(null);
-    const [error, setError] = useState<string | null>(null);
-    const [aiConfigs, setAiConfigs] = useState<AiConfig[]>([]);
-    const [processProgress, setProcessProgress] = useState<{ processed: number, total: number } | null>(null);
-    const [processStatus, setProcessStatus] = useState<string | null>(null);
-    const [analysisProgress, setAnalysisProgress] = useState<{ analyzed: number, total: number, message: string } | null>(null);
-    const [targetLocation, setTargetLocation] = useState<string | undefined>(undefined);
-    const [wpCreds, setWpCreds] = useState<WordPressCreds | null>(null);
     const [wpUpdateError, setWpUpdateError] = useState<string | null>(null);
     
-    const [filterGrade, setFilterGrade] = useState<GradeFilter>('all');
-    const [searchTerm, setSearchTerm] = useState('');
+    // Filters & Sorting
+    const [filter, setFilter] = useState<{ activeCluster: string }>({ activeCluster: 'All Pages' });
+    const [targetLocation, setTargetLocation] = useState<string | undefined>(undefined);
     
+    // Refs for batching
+    const resultBufferRef = useRef<Map<string, Partial<SeoAnalysis>>>(new Map());
+    const bufferFlushTimerRef = useRef<number | null>(null);
+
     const hasValidApiConfig = useMemo(() => aiConfigs.some(c => c.isValid), [aiConfigs]);
+    const isBusy = useMemo(() => auditStage !== 'idle' && auditStage !== 'complete', [auditStage]);
+
+    // Derived State
+    const auditComplete = useMemo(() => seoData.some(d => d.status === 'analyzed'), [seoData]);
+    const pagesForReview = useMemo(() => seoData.filter(d => d.status === 'analyzed' && d.pendingSuggestion), [seoData]);
+
+    const filteredData = useMemo(() => {
+        if (filter.activeCluster === 'All Pages') return seoData;
+        return topicClusters.find(c => c.topic === filter.activeCluster)?.pages || [];
+    }, [seoData, filter, topicClusters]);
+
+    // Save/Load Configs
+    useEffect(() => {
+        const saved = localStorage.getItem('aiConfigs');
+        if (saved) setAiConfigs(JSON.parse(saved));
+    }, []);
+
+    useEffect(() => {
+        localStorage.setItem('aiConfigs', JSON.stringify(aiConfigs));
+    }, [aiConfigs]);
 
     const handleAddConfig = (newConfig: AiConfig) => setAiConfigs(prev => [...prev, newConfig]);
     const handleRemoveConfig = (id: string) => setAiConfigs(prev => prev.filter(c => c.id !== id));
@@ -45,320 +83,474 @@ const App: React.FC = () => {
     };
 
     const resetStateForNewJob = () => {
-        setIsProcessing(true);
         setError(null);
-        setSelectedUrls(new Set());
         setSeoData([]);
-        setProcessProgress(null);
+        setTopicClusters([]);
+        setProgress(null);
         setProcessStatus("Initializing...");
-        setAnalysisProgress(null);
+        setActiveDetailUrl(null);
+        setFilter({ activeCluster: 'All Pages' });
+        setViewMode('dashboard');
+        setSelectedUrls(new Set<string>());
+    };
+    
+    const startAudit = async (auditFn: () => Promise<SeoAnalysis[]>) => {
+        resetStateForNewJob();
+        setAuditStage('crawling');
+        try {
+            const initialData = await auditFn();
+            setSeoData(initialData);
+            // SOTA CHANGE: Do NOT auto-start analysis. Let user select.
+            setAuditStage('idle'); 
+            setProcessStatus("Scan Complete. Select pages to analyze.");
+            setProgress(null);
+        } catch (e) {
+            console.error(e);
+            setError(`Failed during initial data discovery. ${(e as Error).message}`);
+            setAuditStage('idle');
+        }
+    }
+
+    const handleCrawl = (url: string, sitemapUrl?: string, location?: string) => {
+        setTargetLocation(location);
+        startAudit(() => crawlSite(
+            url, sitemapUrl, 
+            (p, t) => setProgress({ processed: p, total: t, stage: 'Scanning Site...' }),
+            (msg) => setProcessStatus(msg)
+        ));
     };
 
-    const handleCrawl = useCallback(async (url: string, sitemapUrl?: string, location?: string) => {
-        if (!hasValidApiConfig) {
-            setError("Please add and validate at least one AI provider API key first.");
-            return;
-        }
-        resetStateForNewJob();
+    const handleProcessFile = (file: File, location?: string) => {
         setTargetLocation(location);
-        
-        try {
-            const pages = await crawlSite(
-                url, sitemapUrl, 
-                (p, t) => setProcessProgress({ processed: p, total: t }),
-                (msg) => setProcessStatus(msg)
-            );
-            setSeoData(pages);
-        } catch (e) {
-            console.error(e);
-            setError(`Failed to crawl the website. ${(e as Error).message}`);
-        } finally {
-            setIsProcessing(false);
-            setProcessProgress(null);
-            setProcessStatus(null);
-        }
-    }, [hasValidApiConfig]);
-
-    const handleProcessFile = useCallback(async (file: File, location?: string) => {
-        if (!hasValidApiConfig) {
-            setError("Please add and validate at least one AI provider API key first.");
-            return;
-        }
-        resetStateForNewJob();
-        setTargetLocation(location);
-
-        try {
-            setProcessStatus(`Parsing ${file.name}...`);
+        startAudit(async () => {
+            setProcessStatus("Parsing file for URLs...");
             const urls = await parseFileForUrls(file);
-            
-            setProcessStatus(`Found ${urls.length} URLs. Processing pages...`);
-            const pages = await processAndScanUrls(
+            setProcessStatus(`Found ${urls.length} URLs. Starting processing...`);
+            return processAndScanUrls(
                 urls,
-                (p, t) => setProcessProgress({ processed: p, total: t }),
+                (p, t) => setProgress({ processed: p, total: t, stage: 'Scanning URLs...' }),
                 (msg) => setProcessStatus(msg)
             );
-            setSeoData(pages);
-        } catch (e) {
-            console.error(e);
-            setError(`Failed to process file. ${(e as Error).message}`);
-        } finally {
-            setIsProcessing(false);
-            setProcessProgress(null);
-            setProcessStatus(null);
-        }
-    }, [hasValidApiConfig]);
-
-
-    const handleAnalyzeAndSuggestSelected = useCallback(async () => {
-        const validConfigs = aiConfigs.filter(c => c.isValid);
-        if (validConfigs.length === 0) return;
-        
-        const urlsToProcess: string[] = [];
-        const cachedDataToUpdate: SeoAnalysis[] = [];
-
-        Array.from(selectedUrls).forEach(url => {
-            const data = seoData.find(d => d.url === url);
-            if (data && (data.status === 'scanned' || data.status === 'error')) {
-                const cachedResult = sessionStorage.getItem(`analysis_${url}`);
-                if (cachedResult) {
-                    console.log(`Using cached result for ${url}`);
-                    const parsedResult = JSON.parse(cachedResult);
-                    const combinedGrade = Math.round((parsedResult.analysis.titleGrade + parsedResult.analysis.descriptionGrade) / 2);
-                    const updatedItem: SeoAnalysis = {
-                        ...data,
-                        ...parsedResult.analysis,
-                        grade: combinedGrade,
-                        suggestions: parsedResult.suggestions,
-                        status: 'analyzed',
-                    };
-                    cachedDataToUpdate.push(updatedItem);
-                } else {
-                    urlsToProcess.push(url);
-                }
-            }
         });
-
-        if (cachedDataToUpdate.length > 0) {
-            setSeoData(prev => prev.map(d => cachedDataToUpdate.find(c => c.url === d.url) || d));
-        }
-
-        if (urlsToProcess.length === 0) return;
+    };
     
-        setIsAnalyzing(true);
-        setAnalysisProgress({ analyzed: 0, total: urlsToProcess.length, message: "Initializing AI workers..." });
-        
-        setSeoData(prev => prev.map(d => urlsToProcess.includes(d.url) ? { ...d, status: 'analyzing', analysisError: undefined } : d));
+    // Helper to flush batched updates to state
+    const flushResultBuffer = useCallback(() => {
+        if (resultBufferRef.current.size === 0) return;
 
-        const dataToProcess = urlsToProcess.map(url => seoData.find(d => d.url === url)!).filter(Boolean);
-        const balancer = new AILoadBalancer(validConfigs);
-
-        balancer.onProgress((progress) => {
-             setAnalysisProgress({ 
-                analyzed: progress.completed, 
-                total: progress.total, 
-                message: `Processing... ${progress.completed}/${progress.total}. ${progress.activeWorkers} AI workers active.`
+        setSeoData(prevData => {
+            return prevData.map(d => {
+                const update = resultBufferRef.current.get(d.url);
+                if (update) {
+                    return { ...d, ...update };
+                }
+                return d;
             });
         });
         
-        balancer.onResult((result) => {
-             sessionStorage.setItem(`analysis_${result.url}`, JSON.stringify(result.data));
+        resultBufferRef.current.clear();
+        bufferFlushTimerRef.current = null;
+    }, []);
 
-             setSeoData(prevData => prevData.map(d => {
-                if (d.url === result.url) {
-                    const combinedGrade = Math.round((result.data.analysis.titleGrade + result.data.analysis.descriptionGrade) / 2);
-                    return {
-                        ...d,
-                        ...result.data.analysis,
-                        grade: combinedGrade,
-                        suggestions: result.data.suggestions,
-                        status: 'analyzed',
-                    };
-                }
-                return d;
-            }));
-        });
-        
-        balancer.onError((url, error) => {
-            console.error(`Failed to analyze ${url}:`, error);
-            setSeoData(prevData => prevData.map(d => d.url === url ? { ...d, status: 'error', analysisError: error.message } : d));
-        });
-
-        await balancer.processQueue(dataToProcess, { allPages: seoData, targetLocation });
-
-        setIsAnalyzing(false);
-        setAnalysisProgress(null);
-    }, [aiConfigs, selectedUrls, seoData, targetLocation]);
-
-    const handleSelectionChange = useCallback((url: string, isSelected: boolean) => {
+    // SOTA: Bulk Selection Handlers
+    const handleToggleSelection = useCallback((url: string) => {
         setSelectedUrls(prev => {
-            const newSelection = new Set(prev);
-            if (isSelected) newSelection.add(url);
-            else newSelection.delete(url);
-            return newSelection;
+            const next = new Set(prev);
+            if (next.has(url)) next.delete(url);
+            else next.add(url);
+            return next;
         });
     }, []);
 
-    const handleOpenRewriteModal = (url: string) => {
-        const data = seoData.find(d => d.url === url);
-        if (data && data.status === 'analyzed') {
-            setModalData(data);
+    const handleSelectAll = useCallback(() => {
+        setSelectedUrls(prev => {
+            if (prev.size === filteredData.length) return new Set<string>();
+            return new Set(filteredData.map(p => p.url));
+        });
+    }, [filteredData]);
+
+    const runAutomatedAnalysis = async (targetUrls: string[], operation: 'analyze' | 'regenerate') => {
+        const validConfigs = aiConfigs.filter(c => c.isValid);
+        if (validConfigs.length === 0) {
+             setError("Please add and validate at least one AI provider API key first.");
+             return;
         }
+
+        const scopeData = seoData.filter(p => targetUrls.includes(p.url));
+        if (scopeData.length === 0) return;
+
+        // 1. CLUSTERING (Targeted or Skip)
+        // For efficiency, we only cluster if we have a lot of unknown topics in the selection
+        // But for Graph RAG, we need context. We will use the existing topics or 'Uncategorized'
+        // and rely on titles for context if not fully clustered.
+        
+        setAuditStage('clustering');
+        
+        // Check cache for clusters on these specific pages
+        const cachedAnalysis = await cacheService.getMany(targetUrls);
+        const nonCachedForCluster = scopeData.filter(p => !cachedAnalysis.has(p.url) && !p.topic);
+
+        // Update topics map from cache immediately
+        cachedAnalysis.forEach((data, url) => {
+             if (data.topic) {
+                 const index = seoData.findIndex(p => p.url === url);
+                 if (index !== -1 && !seoData[index].topic) {
+                     seoData[index].topic = data.topic;
+                 }
+             }
+        });
+
+        // Run lightweight topic extraction only on selected pages that need it
+        if (nonCachedForCluster.length > 0) {
+             const topicExtractorConfig = validConfigs[0];
+             const newTopics = await extractTopicsForClustering(
+                nonCachedForCluster, topicExtractorConfig,
+                (processed, total) => setProgress({ stage: 'AI Clustering Topics...', processed, total })
+            );
+            
+            // Apply topics to state immediately
+            setSeoData(prev => prev.map(p => {
+                if (newTopics.has(p.url)) {
+                    return { ...p, topic: newTopics.get(p.url), primaryTopic: newTopics.get(p.url) };
+                }
+                return p;
+            }));
+        }
+
+        // Re-calculate clusters for the UI (lightweight)
+        const clustersMap = new Map<string, SeoAnalysis[]>();
+        seoData.forEach(page => {
+            const topic = page.topic || 'Uncategorized';
+            if (!clustersMap.has(topic)) clustersMap.set(topic, []);
+            clustersMap.get(topic)!.push(page);
+        });
+        const topicClusterData: TopicCluster[] = Array.from(clustersMap.entries()).map(([topic, pages]) => ({
+            topic, pages, pageCount: pages.length, analyzedCount: 0
+        })).sort((a,b) => b.pageCount - a.pageCount);
+        setTopicClusters(topicClusterData);
+
+        // 2. DEEP ANALYSIS (Load Balanced)
+        setAuditStage('analyzing');
+        const balancer = new AILoadBalancer(validConfigs);
+        let completedCount = 0;
+        
+        const pagesToAnalyze: Job[] = [];
+        
+        for (const page of scopeData) {
+            // If regenerating, we ignore cache. If analyzing, we check cache.
+            const cached = cachedAnalysis.get(page.url);
+            
+            if (operation === 'analyze' && cached && cached.suggestions && cached.titleGrade) {
+                // Already done, just update state from cache to be sure
+                resultBufferRef.current.set(page.url, { ...cached, status: 'analyzed' });
+                completedCount++;
+            } else {
+                 // Needs work
+                 // Get SERP data for this page's topic (if available)
+                 const topic = page.topic || 'Uncategorized';
+                 const serpData = await fetchSerpData(topic, targetLocation);
+                 
+                 // Find cluster context (siblings) from the FULL dataset (even unanalyzed ones, we use titles)
+                 const clusterSiblings = seoData
+                    .filter(p => (p.topic === topic || p.topic === page.topic) && p.url !== page.url)
+                    .map(p => ({ url: p.url, title: p.title }));
+
+                 pagesToAnalyze.push({
+                    data: page,
+                    retries: 0,
+                    serpData: serpData,
+                    topicCluster: clusterSiblings
+                });
+            }
+        }
+        
+        flushResultBuffer();
+
+        const totalToAnalyze = pagesToAnalyze.length;
+
+        if (totalToAnalyze > 0) {
+            balancer.onProgress(progress => {
+                requestAnimationFrame(() => {
+                    setProgress({ stage: `AI Analyzing Selected Pages...`, processed: progress.completed + completedCount, total: scopeData.length });
+                });
+            });
+
+            balancer.onResult(result => {
+                const combinedGrade = Math.round((result.data.analysis.titleGrade + result.data.analysis.descriptionGrade) / 2);
+                const enhancedData = { 
+                    ...result.data.analysis,
+                    grade: combinedGrade, 
+                    suggestions: result.data.suggestions, 
+                    pendingSuggestion: result.data.suggestions?.[0], 
+                    status: 'analyzed' 
+                } as any;
+                
+                cacheService.set(result.url, { ...enhancedData, url: result.url });
+                resultBufferRef.current.set(result.url, enhancedData);
+
+                if (resultBufferRef.current.size >= 3) {
+                    if (bufferFlushTimerRef.current) clearTimeout(bufferFlushTimerRef.current);
+                    flushResultBuffer();
+                } else if (!bufferFlushTimerRef.current) {
+                    bufferFlushTimerRef.current = window.setTimeout(flushResultBuffer, 500);
+                }
+            });
+
+            balancer.onError((url, error) => {
+                 resultBufferRef.current.set(url, { status: 'error', analysisError: error.message });
+                 if (!bufferFlushTimerRef.current) bufferFlushTimerRef.current = window.setTimeout(flushResultBuffer, 1000);
+            });
+            
+            // Pass ALL pages as context for Graph RAG, even if we are only analyzing a few
+            await balancer.processQueue(pagesToAnalyze, { allPages: seoData, targetLocation });
+            flushResultBuffer();
+        }
+
+        // 3. PRIORITY SCORING (Only for newly analyzed)
+        setAuditStage('prioritizing');
+        // Wait for state to settle
+        await new Promise(r => setTimeout(r, 200));
+        
+        // We only score the ones we just touched
+        const pagesToScore = seoData.filter(p => targetUrls.includes(p.url) && p.status === 'analyzed' && p.priorityScore === undefined);
+        
+        if (pagesToScore.length > 0) {
+             const scores = await calculatePriorityScore(
+                pagesToScore,
+                validConfigs[0],
+                (processed, total) => setProgress({ stage: 'AI Calculating Priority...', processed, total })
+            );
+            
+            setSeoData(prev => prev.map(p => {
+                const score = scores.get(p.url);
+                if (score !== undefined) {
+                     const updated = { ...p, priorityScore: score };
+                     cacheService.set(p.url, updated);
+                     return updated;
+                }
+                return p;
+            }));
+        }
+
+        setAuditStage('complete'); // Or idle? Complete shows review button.
+        setProgress(null);
+        setProcessStatus(null);
+        // Clear selection after success? Maybe keep it for review.
     };
+
+    const handleRowClick = useCallback((url: string) => {
+        setActiveDetailUrl(url);
+    }, []);
 
     const handleUpdateSeo = async (url: string, newTitle: string, newDescription: string): Promise<void> => {
         if (!wpCreds) {
             setIsAwaitingWpCreds(true);
             throw new Error("WordPress credentials are not configured.");
         }
-        setIsUpdatingWp(true);
-        setWpUpdateError(null);
-        
         setSeoData(prevData => prevData.map(item => item.url === url ? { ...item, status: 'updating' } : item));
-
         try {
             await updateSeoOnWordPress(wpCreds, url, newTitle, newDescription);
-            setSeoData(prevData => prevData.map(item => item.url === url ? { 
-                ...item, 
+            const updatedItem = { 
+                ...seoData.find(i => i.url === url)!, 
                 title: newTitle, 
-                description: newDescription,
-                status: 'synced',
-            } : item));
+                description: newDescription, 
+                status: 'synced' as const, 
+                pendingSuggestion: undefined 
+            };
             
-            setSelectedUrls(prev => {
-                const newSelection = new Set(prev);
-                newSelection.delete(url);
-                return newSelection;
-            });
+            setSeoData(prevData => prevData.map(item => item.url === url ? updatedItem : item));
+            cacheService.set(url, updatedItem);
+            
         } catch (error) {
-            const errorMessage = (error as Error).message;
-            console.error("WordPress Update Failed:", errorMessage);
-            setWpUpdateError(errorMessage);
-            setSeoData(prevData => prevData.map(item => item.url === url ? { ...item, status: 'analyzed' } : item)); // Revert status
+            setSeoData(prevData => prevData.map(item => item.url === url ? { ...item, status: 'analyzed' } : item));
             throw error;
-        } finally {
-            setIsUpdatingWp(false);
         }
     };
 
+    const handleBulkUpdate = async (): Promise<void> => {
+        if (!wpCreds) {
+            setIsAwaitingWpCreds(true);
+            return;
+        }
+        
+        const urlsToUpdate = (Array.from(selectedUrls) as string[]).filter(url => {
+            const page = seoData.find(p => p.url === url);
+            return page && page.status === 'analyzed' && page.pendingSuggestion;
+        });
+        
+        if (urlsToUpdate.length === 0) return;
+
+        setIsUpdatingWp(true);
+        setWpUpdateError(null);
+
+        const promises = urlsToUpdate.map(url => {
+            const page = seoData.find(p => p.url === url)!;
+            return handleUpdateSeo(url, page.pendingSuggestion!.title, page.pendingSuggestion!.description)
+                .catch(e => {
+                    console.error(`Failed to update ${url}:`, e);
+                });
+        });
+        
+        await Promise.all(promises);
+        setIsUpdatingWp(false);
+        setSelectedUrls(new Set()); // Clear selection after update
+    }
+
+    const handleReviewSync = async (items: { url: string; title: string; description: string }[]) => {
+        if (!wpCreds) {
+            setIsAwaitingWpCreds(true);
+            return;
+        }
+
+        setIsUpdatingWp(true);
+        setWpUpdateError(null);
+
+        const promises = items.map(item => {
+            return handleUpdateSeo(item.url, item.title, item.description)
+                .catch(e => {
+                    console.error(`Failed to update ${item.url}:`, e);
+                });
+        });
+        
+        await Promise.all(promises);
+        setIsUpdatingWp(false);
+    };
+
+    const handleBulkAnalyze = () => {
+        const toAnalyze = (Array.from(selectedUrls) as string[]).filter(url => {
+            const p = seoData.find(page => page.url === url);
+            return p && (p.status === 'discovered' || p.status === 'scanned' || p.status === 'error');
+        });
+        if (toAnalyze.length === 0) return;
+        runAutomatedAnalysis(toAnalyze, 'analyze');
+    };
+
+    const handleBulkRewrite = () => {
+         const toRewrite = (Array.from(selectedUrls) as string[]).filter(url => {
+            const p = seoData.find(page => page.url === url);
+            return p && (p.status === 'analyzed' || p.status === 'synced');
+        });
+        if (toRewrite.length === 0) return;
+        runAutomatedAnalysis(toRewrite, 'regenerate');
+    };
+    
     const handleSaveWpCreds = (creds: WordPressCreds) => {
         setWpCreds(creds);
         setIsAwaitingWpCreds(false);
-        const updateButton = document.querySelector('#wp-update-button') as HTMLButtonElement;
-        if (updateButton) setTimeout(() => updateButton.click(), 100);
     };
 
-    const handleCloseModal = () => {
-        setModalData(null);
-        setWpUpdateError(null);
-    };
+    const activeDetailData = useMemo(() => {
+        return seoData.find(d => d.url === activeDetailUrl) || null;
+    }, [activeDetailUrl, seoData]);
 
-    const filteredData = useMemo(() => {
-        return seoData.filter(item => {
-            const gradeMatch =
-                filterGrade === 'all' ||
-                (filterGrade === 'good' && item.grade !== undefined && item.grade >= 85) ||
-                (filterGrade === 'average' && item.grade !== undefined && item.grade >= 60 && item.grade < 85) ||
-                (filterGrade === 'poor' && item.grade !== undefined && item.grade < 60);
-            const searchMatch = item.url.toLowerCase().includes(searchTerm.toLowerCase());
-            return gradeMatch && searchMatch;
+    // Selection Counts
+    const selectionStats = useMemo(() => {
+        let analyze = 0, rewrite = 0, update = 0;
+        selectedUrls.forEach(url => {
+            const p = seoData.find(page => page.url === url);
+            if (!p) return;
+            if (p.status === 'discovered' || p.status === 'scanned' || p.status === 'error') analyze++;
+            if (p.status === 'analyzed' || p.status === 'synced') rewrite++;
+            if (p.status === 'analyzed' && p.pendingSuggestion) update++;
         });
-    }, [seoData, filterGrade, searchTerm]);
-    
-    const selectableForAnalysisCount = useMemo(() => {
-        return Array.from(selectedUrls).filter(url => {
-            const item = seoData.find(d => d.url === url);
-            return item && (item.status === 'scanned' || item.status === 'error');
-        }).length;
+        return { analyze, rewrite, update };
     }, [selectedUrls, seoData]);
-    
-    const isBusy = isProcessing || isAnalyzing;
 
     return (
         <div className="min-h-screen bg-slate-900 text-slate-200 font-sans flex flex-col">
-            <Header isValidApi={hasValidApiConfig} />
-            <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow">
-                <div className="max-w-7xl mx-auto">
-                    <ApiConfig 
-                        configs={aiConfigs}
-                        onAddConfig={handleAddConfig}
-                        onRemoveConfig={handleRemoveConfig}
-                        onUpdateValidation={handleUpdateConfigValidation}
-                        isDisabled={isBusy} 
-                    />
+            <Header isValidApi={hasValidApiConfig} showReviewButton={pagesForReview.length > 0} onSwitchView={setViewMode} currentView={viewMode} />
+            <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow flex flex-col relative pb-24">
+                 <ApiConfig 
+                    configs={aiConfigs}
+                    onAddConfig={handleAddConfig}
+                    onRemoveConfig={handleRemoveConfig}
+                    onUpdateValidation={handleUpdateConfigValidation}
+                    isDisabled={isBusy} 
+                />
+                
+                {seoData.length === 0 && !isBusy && (
                     <UrlInput 
                         onCrawl={handleCrawl} 
                         onProcessFile={handleProcessFile}
-                        isLoading={isProcessing} 
+                        isLoading={isBusy} 
                         isApiConfigured={hasValidApiConfig} 
                     />
-
-                    {error && <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg text-red-300">{error}</div>}
-
-                    {isBusy && (
-                        <div className="mt-8 text-center space-y-4">
-                            <p className="text-xl text-indigo-300 animate-pulse">
-                                {isProcessing ? 'Processing pages...' : 'AI is performing deep SEO analysis...'}
-                            </p>
-                            {processStatus && <p className="text-md text-slate-400 mt-2">{processStatus}</p>}
-                           {isProcessing && processProgress && (
-                               <ProgressBar 
-                                   progress={(processProgress.processed / processProgress.total) * 100}
-                                   label={`Processed ${processProgress.processed} of ${processProgress.total} pages...`}
-                               />
-                           )}
-                           {isAnalyzing && analysisProgress && (
-                                <ProgressBar 
-                                   progress={(analysisProgress.analyzed / analysisProgress.total) * 100}
-                                   label={analysisProgress.message}
-                               />
+                )}
+                
+                {error && <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg text-red-300">{error}</div>}
+                
+                {isBusy && progress && (
+                    <div className="mt-8 text-center space-y-4">
+                        <p className="text-xl text-indigo-300 animate-pulse">
+                            {progress.stage}
+                        </p>
+                        <ProgressBar 
+                           progress={progress.total > 0 ? (progress.processed / progress.total) * 100 : 0}
+                           label={`${processStatus || ''} (${progress.processed}/${progress.total})`}
+                       />
+                    </div>
+                )}
+                
+                {viewMode === 'dashboard' && seoData.length > 0 && (
+                    <>
+                        <Dashboard data={seoData} onSwitchView={setViewMode} showReviewButton={pagesForReview.length > 0} />
+                        <div className="flex-grow grid grid-cols-12 gap-6 mt-6 min-h-[600px]">
+                            <div className="col-span-12 lg:col-span-3">
+                                <SiteStructurePanel
+                                    clusters={topicClusters}
+                                    activeCluster={filter.activeCluster}
+                                    onSelectCluster={(topic) => setFilter(f => ({ ...f, activeCluster: topic }))}
+                                />
+                            </div>
+                            <div className={`transition-all duration-300 ${activeDetailUrl ? 'col-span-12 lg:col-span-5' : 'col-span-12 lg:col-span-9'}`}>
+                                <SeoDataTable
+                                    data={filteredData}
+                                    onRowClick={handleRowClick}
+                                    activeUrl={activeDetailUrl}
+                                    selectedUrls={selectedUrls}
+                                    onToggleSelection={handleToggleSelection}
+                                    onSelectAll={handleSelectAll}
+                                />
+                            </div>
+                            {activeDetailUrl && (
+                                <div className="col-span-12 lg:col-span-4">
+                                    <DetailPanel data={activeDetailData} onClose={() => setActiveDetailUrl(null)} onUpdate={handleUpdateSeo} isUpdating={isUpdatingWp} updateError={wpUpdateError} />
+                                </div>
                             )}
                         </div>
-                    )}
+                    </>
+                )}
 
-                    {seoData.length > 0 && !isProcessing && (
-                        <>
-                            <Dashboard data={seoData} />
-                            <SeoDataTableControls
-                                filter={filterGrade}
-                                onFilterChange={setFilterGrade}
-                                searchTerm={searchTerm}
-                                onSearchChange={setSearchTerm}
-                            />
-                            <SeoDataTable
-                                data={filteredData}
-                                selectedUrls={selectedUrls}
-                                onSelectionChange={handleSelectionChange}
-                                onOpenRewriteModal={handleOpenRewriteModal}
-                            />
-                            <div className="mt-6 flex flex-col sm:flex-row justify-end gap-4">
-                                <button
-                                    onClick={handleAnalyzeAndSuggestSelected}
-                                    disabled={selectableForAnalysisCount === 0 || isBusy}
-                                    className="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200"
-                                >
-                                    Analyze & Generate Suggestions ({selectableForAnalysisCount})
-                                </button>
-                            </div>
-                        </>
-                    )}
-                </div>
+                {viewMode === 'review' && (
+                    <ReviewAndSyncPanel
+                        pages={pagesForReview}
+                        onSync={handleReviewSync}
+                        isSyncing={isUpdatingWp}
+                        syncError={wpUpdateError}
+                        onDiscard={(url) => setSeoData(prev => prev.map(p => p.url === url ? { ...p, pendingSuggestion: undefined } : p))}
+                    />
+                )}
             </main>
+            
+            {/* Bulk Operations Bar */}
+            {selectedUrls.size > 0 && viewMode === 'dashboard' && (
+                <BulkOperationsPanel 
+                    selectedCount={selectedUrls.size}
+                    selectableForAnalysisCount={selectionStats.analyze}
+                    selectableForRewriteCount={selectionStats.rewrite}
+                    selectableForUpdateCount={selectionStats.update}
+                    onBulkAnalyze={handleBulkAnalyze}
+                    onBulkRewrite={handleBulkRewrite}
+                    onBulkUpdate={handleBulkUpdate}
+                    isBusy={isBusy}
+                />
+            )}
             
             {isAwaitingWpCreds && (
                 <WordPressCredsModal 
                     onSave={handleSaveWpCreds} 
                     onClose={() => setIsAwaitingWpCreds(false)} 
-                    initialUrl={modalData?.url}
-                />
-            )}
-
-            {modalData && (
-                <RewriteModal
-                    data={modalData}
-                    onClose={handleCloseModal}
-                    onUpdate={handleUpdateSeo}
-                    isUpdating={isUpdatingWp}
-                    updateError={wpUpdateError}
+                    initialUrl={activeDetailData?.url}
                 />
             )}
             
