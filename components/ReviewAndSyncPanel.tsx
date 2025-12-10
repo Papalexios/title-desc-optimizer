@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useCallback } from 'react';
+
+import React, { useState, useMemo } from 'react';
 import { SeoAnalysis, AiConfig } from '../types';
-import { SerpPreview } from './common/SerpPreview';
 import { Spinner } from './common/Spinner';
 import { getSemanticDiff } from '../services/aiService';
 
@@ -38,56 +38,57 @@ const ReviewItem: React.FC<ReviewItemProps> = ({ page, isChecked, onToggle, onDi
     };
 
     return (
-        <div className={`p-4 rounded-xl border-2 transition-colors ${isChecked ? 'bg-slate-800/80 border-indigo-500/50' : 'bg-slate-800/50 border-slate-700'}`}>
+        <div className={`p-5 rounded-2xl border transition-all duration-300 ${isChecked ? 'bg-indigo-900/20 border-indigo-500/40 shadow-[0_0_20px_rgba(99,102,241,0.1)]' : 'bg-slate-900/40 border-white/5 hover:border-white/10'}`}>
             <div className="flex items-start gap-4">
                 <input
                     type="checkbox"
                     checked={isChecked}
                     onChange={() => onToggle(page.url)}
-                    className="mt-1 h-5 w-5 rounded bg-slate-900 border-slate-600 text-indigo-600 focus:ring-indigo-500"
+                    className="mt-1 h-5 w-5 rounded bg-slate-800 border-slate-600 text-indigo-500 focus:ring-indigo-500/50 cursor-pointer"
                 />
                 <div className="flex-grow min-w-0">
-                    <p className="font-semibold text-indigo-300 truncate">{page.url}</p>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-3">
+                    <p className="font-bold text-sm text-indigo-300 truncate mb-4">{page.url}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* Original */}
-                        <div>
-                            <p className="text-xs font-semibold uppercase text-slate-500 mb-1">Original</p>
-                            <div className="p-2 rounded-md bg-slate-900/50 border border-slate-700/50">
-                                <p className="text-sm font-medium text-slate-300 truncate" title={page.title}>{page.title}</p>
-                                <p className="text-xs text-slate-400 mt-1 line-clamp-2">{page.description}</p>
+                        <div className="space-y-1">
+                            <p className="text-[10px] font-black uppercase text-slate-500">Original</p>
+                            <div className="p-3 rounded-xl bg-slate-800/50 border border-white/5">
+                                <p className="text-sm font-medium text-slate-400 truncate opacity-80" title={page.title}>{page.title}</p>
+                                <p className="text-xs text-slate-500 mt-1 line-clamp-2">{page.description}</p>
                             </div>
                         </div>
                         {/* Suggestion */}
-                        <div>
-                             <p className="text-xs font-semibold uppercase text-green-500 mb-1">AI Suggestion</p>
-                             <div className="p-2 rounded-md bg-green-900/20 border border-green-500/30">
-                                <p className="text-sm font-medium text-green-300 truncate" title={page.pendingSuggestion?.title}>{page.pendingSuggestion?.title}</p>
-                                <p className="text-xs text-slate-300 mt-1 line-clamp-2">{page.pendingSuggestion?.description}</p>
+                        <div className="space-y-1">
+                             <p className="text-[10px] font-black uppercase text-emerald-500">SOTA Suggestion</p>
+                             <div className="p-3 rounded-xl bg-emerald-900/10 border border-emerald-500/20 relative overflow-hidden">
+                                <div className="absolute top-0 right-0 p-8 bg-emerald-500/10 blur-[30px] rounded-full"></div>
+                                <p className="text-sm font-bold text-emerald-300 truncate relative z-10" title={page.pendingSuggestion?.title}>{page.pendingSuggestion?.title}</p>
+                                <p className="text-xs text-emerald-200/70 mt-1 line-clamp-2 relative z-10">{page.pendingSuggestion?.description}</p>
                             </div>
                         </div>
                     </div>
 
-                    <div className="mt-4 flex items-center justify-between">
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                          <div className="relative group">
                             <button 
                                 onClick={handleShowDiff}
                                 disabled={isLoadingDiff || !aiConfig}
-                                className="flex items-center text-xs font-semibold text-sky-300 hover:text-sky-200 disabled:opacity-50"
+                                className="flex items-center text-xs font-bold text-sky-400 hover:text-sky-300 disabled:opacity-50 uppercase tracking-wide bg-sky-900/20 px-3 py-1.5 rounded-full border border-sky-500/20"
                             >
                                 {isLoadingDiff ? <Spinner /> : <InfoIcon />}
-                                See why it's better
+                                Why is this better?
                             </button>
                              {diff && (
-                                <div className="absolute bottom-full left-0 mb-2 w-72 p-3 bg-slate-900 border border-slate-600 rounded-lg shadow-lg z-10 opacity-100 transition-opacity">
-                                    <ul className="space-y-1.5 text-xs text-slate-300 list-disc list-inside">
+                                <div className="absolute bottom-full left-0 mb-2 w-72 p-4 glass-panel rounded-xl shadow-2xl z-20 animate-fadeIn">
+                                    <ul className="space-y-2 text-xs text-slate-300 list-disc list-inside">
                                         {diff.map((item, i) => <li key={i}>{item}</li>)}
                                     </ul>
                                 </div>
                             )}
                          </div>
 
-                        <button onClick={() => onDiscard(page.url)} className="text-xs font-semibold text-red-400 hover:text-red-300">
-                            Discard Suggestion
+                        <button onClick={() => onDiscard(page.url)} className="text-xs font-bold text-rose-400 hover:text-rose-300 uppercase tracking-wide px-3 py-1.5 hover:bg-rose-900/20 rounded-full transition-colors">
+                            Discard
                         </button>
                     </div>
                 </div>
@@ -108,9 +109,8 @@ interface ReviewAndSyncPanelProps {
 export const ReviewAndSyncPanel: React.FC<ReviewAndSyncPanelProps> = ({ pages, onSync, isSyncing, syncError, onDiscard }) => {
     const [selectedUrls, setSelectedUrls] = useState<Set<string>>(() => new Set(pages.map(p => p.url)));
     
-    // This is a bit of a hack to get a valid AI config for the semantic diff
     const aiConfigForDiff = useMemo(() => {
-        const aiConfigsStr = localStorage.getItem('aiConfigs'); // Assuming App component saves this
+        const aiConfigsStr = localStorage.getItem('aiConfigs');
         if (aiConfigsStr) {
             const configs: AiConfig[] = JSON.parse(aiConfigsStr);
             return configs.find(c => c.isValid);
@@ -145,28 +145,27 @@ export const ReviewAndSyncPanel: React.FC<ReviewAndSyncPanelProps> = ({ pages, o
 
 
     return (
-        <div className="mt-6">
-            <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
-                <h2 className="text-2xl font-bold text-white">Review & Sync AI Suggestions</h2>
-                <p className="text-slate-400 mt-1">Approve the AI-generated meta tags before updating them on your WordPress site.</p>
+        <div className="mt-6 pb-32">
+            <div className="glass-panel p-6 rounded-2xl mb-8">
+                <h2 className="text-2xl font-black text-white tracking-tight">Sync Gateway</h2>
+                <p className="text-slate-400 mt-1">Review AI optimizations before pushing to production.</p>
             </div>
             
-            <div className="sticky top-20 bg-slate-900/80 backdrop-blur-sm z-30 py-4 my-6 border-y border-slate-700">
-                <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                        <p className="text-lg font-semibold text-white">{selectedUrls.size} of {pages.length} selected</p>
-                        <button onClick={handleSelectAll} className="text-sm font-semibold text-indigo-300 hover:text-white">Select All</button>
-                        <button onClick={handleDeselectAll} className="text-sm font-semibold text-indigo-300 hover:text-white">Deselect All</button>
-                    </div>
-                     <button
-                        onClick={handleSync}
-                        disabled={isSyncing || selectedUrls.size === 0}
-                        className="flex items-center justify-center w-full md:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200"
-                    >
-                        {isSyncing ? <Spinner /> : `Sync ${selectedUrls.size} Changes to WordPress`}
-                    </button>
+            <div className="sticky top-20 z-30 mb-8 glass-panel p-4 rounded-xl shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <p className="text-sm font-bold text-white"><span className="text-indigo-400">{selectedUrls.size}</span> Selected</p>
+                    <div className="h-4 w-px bg-white/10"></div>
+                    <button onClick={handleSelectAll} className="text-xs font-bold text-slate-400 hover:text-white uppercase">All</button>
+                    <button onClick={handleDeselectAll} className="text-xs font-bold text-slate-400 hover:text-white uppercase">None</button>
                 </div>
-                {syncError && <p className="text-center text-red-300 mt-2">{syncError}</p>}
+                 <button
+                    onClick={handleSync}
+                    disabled={isSyncing || selectedUrls.size === 0}
+                    className="flex items-center justify-center w-full md:w-auto px-6 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 transition-all text-sm"
+                >
+                    {isSyncing ? <Spinner /> : `Push ${selectedUrls.size} Changes Live`}
+                </button>
+                {syncError && <p className="absolute -bottom-8 left-0 right-0 text-center text-rose-400 text-xs">{syncError}</p>}
             </div>
 
             <div className="space-y-4">

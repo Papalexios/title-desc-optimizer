@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface BulkOperationsPanelProps {
@@ -22,36 +23,32 @@ export const BulkOperationsPanel: React.FC<BulkOperationsPanelProps> = ({
     isBusy,
 }) => {
     return (
-        <div className="fixed bottom-0 left-0 right-0 bg-slate-800/80 backdrop-blur-sm border-t border-slate-700 p-4 shadow-2xl z-40">
-            <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div>
-                    <p className="text-lg font-semibold text-white">{selectedCount} page(s) selected</p>
-                    <p className="text-xs text-slate-400">Choose a bulk action to perform on your selection.</p>
+        <div className="fixed bottom-6 left-4 right-4 z-40 flex justify-center">
+            <div className="bg-slate-900/80 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl flex flex-col sm:flex-row items-center gap-4 max-w-2xl w-full">
+                <div className="px-3 text-center sm:text-left">
+                    <p className="text-sm font-bold text-white whitespace-nowrap">{selectedCount} Selected</p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 w-full sm:w-auto">
                     <button
                         onClick={onBulkAnalyze}
                         disabled={isBusy || selectableForAnalysisCount === 0}
-                        title={selectableForAnalysisCount > 0 ? `Analyze ${selectableForAnalysisCount} new page(s)` : 'Select pages with status "Scanned" or "Error" to analyze'}
-                        className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200 text-sm"
+                        className="flex-1 sm:flex-none px-4 py-2.5 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none transition-all text-xs sm:text-sm whitespace-nowrap"
                     >
-                        Analyze Selected ({selectableForAnalysisCount})
+                        Analyze ({selectableForAnalysisCount})
                     </button>
                     <button
                         onClick={onBulkRewrite}
                         disabled={isBusy || selectableForRewriteCount === 0}
-                        title={selectableForRewriteCount > 0 ? `Regenerate suggestions for ${selectableForRewriteCount} page(s)` : 'Select "Analyzed" pages to regenerate suggestions'}
-                        className="px-4 py-2 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200 text-sm"
+                        className="flex-1 sm:flex-none px-4 py-2.5 bg-purple-600 text-white font-bold rounded-xl shadow-lg shadow-purple-500/20 hover:bg-purple-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none transition-all text-xs sm:text-sm whitespace-nowrap"
                     >
-                        Regenerate ({selectableForRewriteCount})
+                        Rewrite ({selectableForRewriteCount})
                     </button>
                     <button
                         onClick={onBulkUpdate}
                         disabled={isBusy || selectableForUpdateCount === 0}
-                        title={selectableForUpdateCount > 0 ? `Auto-update ${selectableForUpdateCount} page(s) on WordPress` : 'Select "Analyzed" pages to update'}
-                        className="px-4 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 focus:ring-offset-slate-900 disabled:bg-slate-500 disabled:cursor-not-allowed transition-colors duration-200 text-sm"
+                        className="flex-1 sm:flex-none px-4 py-2.5 bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/20 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none transition-all text-xs sm:text-sm whitespace-nowrap"
                     >
-                        Auto-Update WP ({selectableForUpdateCount})
+                        Sync ({selectableForUpdateCount})
                     </button>
                 </div>
             </div>

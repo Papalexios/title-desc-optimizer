@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { SeoAnalysis } from '../types';
 import { GradeBadge } from './common/GradeBadge';
@@ -9,48 +10,35 @@ type SortDirection = 'asc' | 'desc';
 const StatusBadge: React.FC<{ status: SeoAnalysis['status'] }> = ({ status }) => {
     switch (status) {
         case 'analyzing':
-            return <span className="flex items-center text-xs font-medium text-sky-300"><Spinner /> Analyzing...</span>;
+            return <span className="flex items-center text-[10px] font-bold uppercase tracking-wider text-sky-400"><Spinner /> Analyzing</span>;
         case 'analyzed':
-             return <span className="flex items-center text-xs font-medium text-indigo-300">Analyzed</span>;
+             return <span className="flex items-center text-[10px] font-bold uppercase tracking-wider text-indigo-400">Analyzed</span>;
         case 'synced':
-            return <span className="flex items-center text-xs font-medium text-green-400">Synced to WP</span>;
+            return <span className="flex items-center text-[10px] font-bold uppercase tracking-wider text-emerald-400">Synced</span>;
         case 'updating':
-            return <span className="flex items-center text-xs font-medium text-yellow-300"><Spinner /> Updating...</span>;
+            return <span className="flex items-center text-[10px] font-bold uppercase tracking-wider text-amber-400"><Spinner /> Updating</span>;
         case 'error':
-            return <span className="flex items-center text-xs font-medium text-red-400">Error</span>;
+            return <span className="flex items-center text-[10px] font-bold uppercase tracking-wider text-rose-500">Error</span>;
         case 'scanned':
-             return <span className="text-xs font-medium text-slate-400">Ready to Analyze</span>;
-        case 'discovered':
-             return <span className="text-xs font-medium text-slate-500">Discovered</span>;
+             return <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Ready</span>;
         default:
-            return <span className="text-xs font-medium text-slate-500">{status}</span>;
+            return <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{status}</span>;
     }
 };
 
 const PriorityIndicator: React.FC<{ score: number }> = ({ score }) => {
     const getColor = () => {
-        if (score > 80) return 'text-red-400';
-        if (score > 60) return 'text-orange-400';
+        if (score > 80) return 'text-rose-400';
+        if (score > 60) return 'text-amber-400';
         if (score > 40) return 'text-yellow-400';
-        return 'text-slate-500';
+        return 'text-slate-600';
     };
     return (
-        <div className="flex items-center gap-1.5" title={`Priority Score: ${score}`}>
-            <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 ${getColor()}`} viewBox="0 0 20 20" fill="currentColor">
+        <div className="flex items-center gap-1" title={`Priority Score: ${score}`}>
+            <svg xmlns="http://www.w3.org/2000/svg" className={`h-3.5 w-3.5 ${getColor()}`} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.934l-6.794 12.43a1 1 0 00.385 1.451 1 1 0 001.45-.385S11.498 9.502 11.498 9.5c0-.002 0-.004 0-.006l.003-.005c.21-.375.478-.697.822-.934a1 1 0 00.385-1.45z" clipRule="evenodd" />
             </svg>
-            <span className="font-semibold text-sm">{score}</span>
-        </div>
-    );
-};
-
-const SortableHeader: React.FC<{ label: string; sortKey: SortKey; currentSort: { key: SortKey; dir: SortDirection }; onSort: (key: SortKey) => void; className?: string }> = 
-({ label, sortKey, currentSort, onSort, className }) => {
-    const isCurrent = currentSort.key === sortKey;
-    const icon = isCurrent ? (currentSort.dir === 'asc' ? '▲' : '▼') : '';
-    return (
-        <div className={`cursor-pointer ${className}`} onClick={() => onSort(sortKey)}>
-            {label} <span className="text-indigo-400">{icon}</span>
+            <span className="font-bold text-xs font-mono">{score}</span>
         </div>
     );
 };
@@ -69,11 +57,10 @@ export const SeoDataTable: React.FC<SeoDataTableProps> = ({
 }) => {
     const [sort, setSort] = useState<{ key: SortKey; dir: SortDirection }>({ key: 'priority', dir: 'desc' });
     
-    // --- SOTA: VIRTUALIZATION ENGINE ---
     const parentRef = useRef<HTMLDivElement>(null);
     const [visibleHeight, setVisibleHeight] = useState(600);
     const [scrollTop, setScrollTop] = useState(0);
-    const ROW_HEIGHT = 88; // Fixed height for speed
+    const ROW_HEIGHT = 88; // Optimized for mobile touch targets
 
     useEffect(() => {
         if (parentRef.current) {
@@ -84,15 +71,6 @@ export const SeoDataTable: React.FC<SeoDataTableProps> = ({
             return () => resizeObserver.disconnect();
         }
     }, []);
-    
-    const handleSort = (key: SortKey) => {
-        setSort(prev => {
-            if (prev.key === key) {
-                return { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
-            }
-            return { key, dir: 'desc' };
-        });
-    };
 
     const sortedData = useMemo(() => {
         return [...data].sort((a, b) => {
@@ -106,19 +84,21 @@ export const SeoDataTable: React.FC<SeoDataTableProps> = ({
 
     if (data.length === 0) {
         return (
-            <div className="text-center bg-slate-800/50 border border-slate-700 rounded-lg p-12 h-full flex flex-col justify-center">
-                <h3 className="text-xl font-semibold text-slate-300">No Pages Found</h3>
-                <p className="text-slate-400 mt-2">The pages for the selected topic cluster will appear here.</p>
+            <div className="glass-panel rounded-xl p-12 h-full flex flex-col justify-center items-center text-center">
+                <div className="bg-slate-800/50 p-4 rounded-full mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                </div>
+                <h3 className="text-lg font-semibold text-slate-300">No Pages Found</h3>
+                <p className="text-slate-500 mt-2 text-sm">Cluster is empty.</p>
             </div>
         );
     }
     
-    // Virtualization Calculations
     const totalHeight = sortedData.length * ROW_HEIGHT;
     const startIndex = Math.floor(scrollTop / ROW_HEIGHT);
     const endIndex = Math.min(
         sortedData.length - 1,
-        Math.floor((scrollTop + visibleHeight) / ROW_HEIGHT) + 5 // +5 Buffer
+        Math.floor((scrollTop + visibleHeight) / ROW_HEIGHT) + 4
     );
 
     const virtualItems = [];
@@ -133,30 +113,39 @@ export const SeoDataTable: React.FC<SeoDataTableProps> = ({
     const allSelected = selectedUrls && sortedData.length > 0 && sortedData.every(d => selectedUrls.has(d.url));
 
     return (
-        <div className="bg-slate-800/50 rounded-xl border border-slate-700 h-full flex flex-col overflow-hidden">
-            {/* Fixed Header */}
-            <div className="p-4 border-b border-slate-700 hidden lg:block bg-slate-800 z-10 shrink-0">
-                 <div className="grid grid-cols-12 gap-4 text-xs font-semibold text-slate-400 uppercase tracking-wider items-center">
-                    <div className="col-span-6 flex items-center gap-3">
+        <div className="glass-panel rounded-2xl h-full flex flex-col overflow-hidden shadow-2xl relative">
+            {/* Desktop Header - Hidden on Mobile */}
+            <div className="p-4 border-b border-white/5 bg-slate-900/40 hidden lg:block z-20">
+                 <div className="grid grid-cols-12 gap-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest items-center">
+                    <div className="col-span-6 flex items-center gap-4">
                         {onSelectAll && (
                             <input 
                                 type="checkbox" 
                                 checked={allSelected} 
                                 onChange={onSelectAll}
-                                className="h-4 w-4 rounded bg-slate-900 border-slate-600 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                className="h-4 w-4 rounded bg-slate-800 border-slate-600 text-indigo-500 focus:ring-indigo-500/50 cursor-pointer transition-all"
                             />
                         )}
-                        <SortableHeader label="URL" sortKey="url" currentSort={sort} onSort={handleSort} />
+                        <span>URL / Title</span>
                     </div>
-                    <SortableHeader label="Priority" sortKey="priority" currentSort={sort} onSort={handleSort} className="col-span-2 text-center" />
-                    <SortableHeader label="Grade" sortKey="grade" currentSort={sort} onSort={handleSort} className="col-span-1 text-center" />
-                    <div className="col-span-3">Status</div>
+                    <div className="col-span-2 text-center">Priority</div>
+                    <div className="col-span-1 text-center">Grade</div>
+                    <div className="col-span-3 text-right pr-2">Status</div>
                 </div>
             </div>
             
-            {/* Virtual Scroll Container */}
+            {/* Mobile Header - Select All */}
+            <div className="lg:hidden p-3 border-b border-white/5 bg-slate-900/40 flex justify-between items-center z-20">
+                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{sortedData.length} Pages</span>
+                 {onSelectAll && (
+                    <button onClick={onSelectAll} className="text-xs font-semibold text-indigo-400">
+                        {allSelected ? 'Deselect All' : 'Select All'}
+                    </button>
+                 )}
+            </div>
+            
             <div 
-                className="overflow-y-auto flex-grow relative custom-scrollbar"
+                className="overflow-y-auto flex-grow relative"
                 ref={parentRef}
                 onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
             >
@@ -175,32 +164,53 @@ export const SeoDataTable: React.FC<SeoDataTableProps> = ({
                                     right: 0,
                                     height: `${ROW_HEIGHT}px`
                                 }}
-                                className={`grid grid-cols-12 gap-4 items-center p-4 border-b border-slate-700/50 transition-colors duration-200 ${isActive ? 'bg-indigo-900/40 border-l-2 border-l-indigo-500' : 'hover:bg-slate-800'}`}
+                                className={`group p-4 border-b border-white/5 transition-all duration-200 cursor-pointer ${isActive ? 'bg-indigo-500/10 border-indigo-500/30' : 'hover:bg-white/5'}`}
+                                onClick={() => onRowClick(item.url)}
                             >
-                                <div className="col-span-12 lg:col-span-6 min-w-0 flex items-center gap-3">
+                                <div className="flex items-center gap-3 h-full">
                                     {onToggleSelection && (
-                                        <div onClick={(e) => e.stopPropagation()}>
+                                        <div onClick={(e) => e.stopPropagation()} className="flex-shrink-0">
                                             <input 
                                                 type="checkbox" 
                                                 checked={isSelected} 
                                                 onChange={() => onToggleSelection(item.url)}
-                                                className="h-4 w-4 rounded bg-slate-900 border-slate-600 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                                className="h-5 w-5 rounded bg-slate-800 border-slate-600 text-indigo-500 focus:ring-indigo-500/50 cursor-pointer transition-all"
                                             />
                                         </div>
                                     )}
-                                    <div className="min-w-0 cursor-pointer flex-grow" onClick={() => onRowClick(item.url)}>
-                                        <p className="text-sm font-medium text-indigo-300 truncate" title={item.url}>{item.url}</p>
-                                        <p className="text-xs text-slate-400 truncate mt-1" title={item.title}>{item.title || '(No title found)'}</p>
+                                    
+                                    <div className="flex-grow min-w-0 flex flex-col justify-center gap-1">
+                                        <div className="flex items-center justify-between">
+                                            <p className={`text-sm font-semibold truncate pr-2 ${isActive ? 'text-indigo-300' : 'text-slate-200'}`} title={item.url}>
+                                                {item.url}
+                                            </p>
+                                            {/* Mobile Status Indicator */}
+                                            <div className="lg:hidden">
+                                                 <StatusBadge status={item.status} />
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-xs text-slate-500 truncate max-w-[70%]" title={item.title}>{item.title || '(No title)'}</p>
+                                            
+                                            {/* Mobile Priority/Grade */}
+                                            <div className="flex items-center gap-3 lg:hidden">
+                                                {item.priorityScore !== undefined && <PriorityIndicator score={item.priorityScore} />}
+                                                {item.grade !== undefined && <GradeBadge grade={item.grade} />}
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="col-span-4 lg:col-span-2 flex justify-center cursor-pointer" onClick={() => onRowClick(item.url)}>
-                                    {item.priorityScore !== undefined ? <PriorityIndicator score={item.priorityScore} /> : <span className="text-slate-500 text-xs">-</span>}
-                                </div>
-                                <div className="col-span-4 lg:col-span-1 flex justify-center cursor-pointer" onClick={() => onRowClick(item.url)}>
-                                    {item.grade !== undefined ? <GradeBadge grade={item.grade} /> : <span className="text-slate-500 text-xs">-</span>}
-                                </div>
-                                <div className="col-span-4 lg:col-span-3 cursor-pointer" onClick={() => onRowClick(item.url)}>
-                                    <StatusBadge status={item.status} />
+                                    
+                                    {/* Desktop Columns */}
+                                    <div className="hidden lg:flex col-span-2 justify-center w-24">
+                                        {item.priorityScore !== undefined ? <PriorityIndicator score={item.priorityScore} /> : <span className="text-slate-700 text-xs">-</span>}
+                                    </div>
+                                    <div className="hidden lg:flex col-span-1 justify-center w-16">
+                                        {item.grade !== undefined ? <GradeBadge grade={item.grade} /> : <span className="text-slate-700 text-xs">-</span>}
+                                    </div>
+                                    <div className="hidden lg:flex col-span-3 justify-end w-32">
+                                        <StatusBadge status={item.status} />
+                                    </div>
                                 </div>
                             </div>
                         );

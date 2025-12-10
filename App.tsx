@@ -100,7 +100,6 @@ const App: React.FC = () => {
         try {
             const initialData = await auditFn();
             setSeoData(initialData);
-            // SOTA CHANGE: Do NOT auto-start analysis. Let user select.
             setAuditStage('idle'); 
             setProcessStatus("Scan Complete. Select pages to analyze.");
             setProgress(null);
@@ -134,7 +133,6 @@ const App: React.FC = () => {
         });
     };
     
-    // Helper to flush batched updates to state
     const flushResultBuffer = useCallback(() => {
         if (resultBufferRef.current.size === 0) return;
 
@@ -152,7 +150,6 @@ const App: React.FC = () => {
         bufferFlushTimerRef.current = null;
     }, []);
 
-    // SOTA: Bulk Selection Handlers
     const handleToggleSelection = useCallback((url: string) => {
         setSelectedUrls(prev => {
             const next = new Set(prev);
@@ -178,19 +175,12 @@ const App: React.FC = () => {
 
         const scopeData = seoData.filter(p => targetUrls.includes(p.url));
         if (scopeData.length === 0) return;
-
-        // 1. CLUSTERING (Targeted or Skip)
-        // For efficiency, we only cluster if we have a lot of unknown topics in the selection
-        // But for Graph RAG, we need context. We will use the existing topics or 'Uncategorized'
-        // and rely on titles for context if not fully clustered.
         
         setAuditStage('clustering');
         
-        // Check cache for clusters on these specific pages
         const cachedAnalysis = await cacheService.getMany(targetUrls);
         const nonCachedForCluster = scopeData.filter(p => !cachedAnalysis.has(p.url) && !p.topic);
 
-        // Update topics map from cache immediately
         cachedAnalysis.forEach((data, url) => {
              if (data.topic) {
                  const index = seoData.findIndex(p => p.url === url);
@@ -200,7 +190,6 @@ const App: React.FC = () => {
              }
         });
 
-        // Run lightweight topic extraction only on selected pages that need it
         if (nonCachedForCluster.length > 0) {
              const topicExtractorConfig = validConfigs[0];
              const newTopics = await extractTopicsForClustering(
@@ -208,7 +197,6 @@ const App: React.FC = () => {
                 (processed, total) => setProgress({ stage: 'AI Clustering Topics...', processed, total })
             );
             
-            // Apply topics to state immediately
             setSeoData(prev => prev.map(p => {
                 if (newTopics.has(p.url)) {
                     return { ...p, topic: newTopics.get(p.url), primaryTopic: newTopics.get(p.url) };
@@ -217,7 +205,6 @@ const App: React.FC = () => {
             }));
         }
 
-        // Re-calculate clusters for the UI (lightweight)
         const clustersMap = new Map<string, SeoAnalysis[]>();
         seoData.forEach(page => {
             const topic = page.topic || 'Uncategorized';
@@ -229,7 +216,6 @@ const App: React.FC = () => {
         })).sort((a,b) => b.pageCount - a.pageCount);
         setTopicClusters(topicClusterData);
 
-        // 2. DEEP ANALYSIS (Load Balanced)
         setAuditStage('analyzing');
         const balancer = new AILoadBalancer(validConfigs);
         let completedCount = 0;
@@ -237,20 +223,15 @@ const App: React.FC = () => {
         const pagesToAnalyze: Job[] = [];
         
         for (const page of scopeData) {
-            // If regenerating, we ignore cache. If analyzing, we check cache.
             const cached = cachedAnalysis.get(page.url);
             
             if (operation === 'analyze' && cached && cached.suggestions && cached.titleGrade) {
-                // Already done, just update state from cache to be sure
                 resultBufferRef.current.set(page.url, { ...cached, status: 'analyzed' });
                 completedCount++;
             } else {
-                 // Needs work
-                 // Get SERP data for this page's topic (if available)
                  const topic = page.topic || 'Uncategorized';
                  const serpData = await fetchSerpData(topic, targetLocation);
                  
-                 // Find cluster context (siblings) from the FULL dataset (even unanalyzed ones, we use titles)
                  const clusterSiblings = seoData
                     .filter(p => (p.topic === topic || p.topic === page.topic) && p.url !== page.url)
                     .map(p => ({ url: p.url, title: p.title }));
@@ -301,17 +282,13 @@ const App: React.FC = () => {
                  if (!bufferFlushTimerRef.current) bufferFlushTimerRef.current = window.setTimeout(flushResultBuffer, 1000);
             });
             
-            // Pass ALL pages as context for Graph RAG, even if we are only analyzing a few
             await balancer.processQueue(pagesToAnalyze, { allPages: seoData, targetLocation });
             flushResultBuffer();
         }
 
-        // 3. PRIORITY SCORING (Only for newly analyzed)
         setAuditStage('prioritizing');
-        // Wait for state to settle
         await new Promise(r => setTimeout(r, 200));
         
-        // We only score the ones we just touched
         const pagesToScore = seoData.filter(p => targetUrls.includes(p.url) && p.status === 'analyzed' && p.priorityScore === undefined);
         
         if (pagesToScore.length > 0) {
@@ -332,10 +309,9 @@ const App: React.FC = () => {
             }));
         }
 
-        setAuditStage('complete'); // Or idle? Complete shows review button.
+        setAuditStage('complete');
         setProgress(null);
         setProcessStatus(null);
-        // Clear selection after success? Maybe keep it for review.
     };
 
     const handleRowClick = useCallback((url: string) => {
@@ -393,7 +369,7 @@ const App: React.FC = () => {
         
         await Promise.all(promises);
         setIsUpdatingWp(false);
-        setSelectedUrls(new Set()); // Clear selection after update
+        setSelectedUrls(new Set()); 
     }
 
     const handleReviewSync = async (items: { url: string; title: string; description: string }[]) => {
@@ -443,7 +419,6 @@ const App: React.FC = () => {
         return seoData.find(d => d.url === activeDetailUrl) || null;
     }, [activeDetailUrl, seoData]);
 
-    // Selection Counts
     const selectionStats = useMemo(() => {
         let analyze = 0, rewrite = 0, update = 0;
         selectedUrls.forEach(url => {
@@ -457,9 +432,9 @@ const App: React.FC = () => {
     }, [selectedUrls, seoData]);
 
     return (
-        <div className="min-h-screen bg-slate-900 text-slate-200 font-sans flex flex-col">
+        <div className="min-h-screen text-slate-200 font-sans flex flex-col">
             <Header isValidApi={hasValidApiConfig} showReviewButton={pagesForReview.length > 0} onSwitchView={setViewMode} currentView={viewMode} />
-            <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow flex flex-col relative pb-24">
+            <main className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow flex flex-col relative pb-32">
                  <ApiConfig 
                     configs={aiConfigs}
                     onAddConfig={handleAddConfig}
@@ -477,11 +452,11 @@ const App: React.FC = () => {
                     />
                 )}
                 
-                {error && <div className="mt-6 p-4 bg-red-900/50 border border-red-500 rounded-lg text-red-300">{error}</div>}
+                {error && <div className="mt-6 p-4 glass-panel border-red-500/50 text-red-300 rounded-xl">{error}</div>}
                 
                 {isBusy && progress && (
                     <div className="mt-8 text-center space-y-4">
-                        <p className="text-xl text-indigo-300 animate-pulse">
+                        <p className="text-xl text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-purple-300 font-bold animate-pulse">
                             {progress.stage}
                         </p>
                         <ProgressBar 
@@ -494,14 +469,17 @@ const App: React.FC = () => {
                 {viewMode === 'dashboard' && seoData.length > 0 && (
                     <>
                         <Dashboard data={seoData} onSwitchView={setViewMode} showReviewButton={pagesForReview.length > 0} />
-                        <div className="flex-grow grid grid-cols-12 gap-6 mt-6 min-h-[600px]">
-                            <div className="col-span-12 lg:col-span-3">
+                        <div className="flex-grow grid grid-cols-12 gap-6 mt-6 min-h-[600px] relative">
+                            {/* Site Structure Sidebar (Hidden on small mobile) */}
+                            <div className="hidden lg:block col-span-3">
                                 <SiteStructurePanel
                                     clusters={topicClusters}
                                     activeCluster={filter.activeCluster}
                                     onSelectCluster={(topic) => setFilter(f => ({ ...f, activeCluster: topic }))}
                                 />
                             </div>
+                            
+                            {/* Main Data Table */}
                             <div className={`transition-all duration-300 ${activeDetailUrl ? 'col-span-12 lg:col-span-5' : 'col-span-12 lg:col-span-9'}`}>
                                 <SeoDataTable
                                     data={filteredData}
@@ -512,8 +490,10 @@ const App: React.FC = () => {
                                     onSelectAll={handleSelectAll}
                                 />
                             </div>
+                            
+                            {/* Detail Panel - Overlay on Mobile, Sidebar on Desktop */}
                             {activeDetailUrl && (
-                                <div className="col-span-12 lg:col-span-4">
+                                <div className="fixed inset-0 z-50 lg:static lg:z-auto lg:col-span-4 lg:inset-auto">
                                     <DetailPanel data={activeDetailData} onClose={() => setActiveDetailUrl(null)} onUpdate={handleUpdateSeo} isUpdating={isUpdatingWp} updateError={wpUpdateError} />
                                 </div>
                             )}
@@ -532,7 +512,6 @@ const App: React.FC = () => {
                 )}
             </main>
             
-            {/* Bulk Operations Bar */}
             {selectedUrls.size > 0 && viewMode === 'dashboard' && (
                 <BulkOperationsPanel 
                     selectedCount={selectedUrls.size}

@@ -3,34 +3,60 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>SerpQuantum | Autonomous SEO Intelligence</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      /* For custom scrollbars */
+      body {
+        background-color: #020617; /* slate-950 */
+        overflow-x: hidden;
+      }
+      
+      /* SOTA Background Mesh */
+      .mesh-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -1;
+        background: 
+          radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+          radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
+          radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.15) 0px, transparent 50%),
+          radial-gradient(at 0% 100%, rgba(56, 189, 248, 0.15) 0px, transparent 50%);
+        filter: blur(40px);
+        opacity: 0.6;
+      }
+
+      /* Modern Scrollbar */
       ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #0f172a; /* slate-900 */
+        background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: #475569; /* slate-600 */
-        border-radius: 4px;
+        background: rgba(148, 163, 184, 0.2);
+        border-radius: 10px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #64748b; /* slate-500 */
+        background: rgba(148, 163, 184, 0.4);
       }
-      /* For animated progress bars */
-      @keyframes progress-bar-stripes {
-        from { background-position: 1rem 0; }
-        to { background-position: 0 0; }
+
+      /* Text Selection */
+      ::selection {
+        background: rgba(99, 102, 241, 0.3);
+        color: #fff;
       }
-      .progress-bar-animated {
-        background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent);
-        background-size: 1rem 1rem;
-        animation: progress-bar-stripes 1s linear infinite;
+      
+      /* Utilities */
+      .glass-panel {
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
       }
     </style>
   <script type="importmap">
@@ -44,7 +70,8 @@
 }
 </script>
 </head>
-  <body class="bg-slate-900 text-white">
+  <body class="text-slate-200 antialiased selection:bg-indigo-500/30">
+    <div class="mesh-bg"></div>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
